@@ -121,6 +121,7 @@ pub async fn execute_tool(
     tts_engine: Option<&crate::tts::TtsEngine>,
     docker_config: Option<&openfang_types::config::DockerSandboxConfig>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
+    sender_id: Option<&str>,
 ) -> ToolResult {
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
     // (e.g. "fs-write" → "file_write") resolve to the canonical OpenFang name.
@@ -348,7 +349,7 @@ pub async fn execute_tool(
         "ollama_structured" => tool_ollama_structured(input).await,
 
         // Cron scheduling tools
-        "cron_create" => tool_cron_create(input, kernel, caller_agent_id).await,
+        "cron_create" => tool_cron_create(input, kernel, caller_agent_id, sender_id).await,
         "cron_list" => tool_cron_list(kernel, caller_agent_id).await,
         "cron_cancel" => tool_cron_cancel(input, kernel).await,
 
@@ -2206,10 +2207,29 @@ async fn tool_cron_create(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Agent ID required for cron_create")?;
-    kh.cron_create(agent_id, input.clone()).await
+
+    // If delivery is last_channel and we have a sender_id, replace with
+    // explicit channel delivery to prevent multi-user race conditions.
+    let mut job = input.clone();
+    if let Some(sid) = sender_id {
+        let delivery = &job["delivery"];
+        let is_last_channel = delivery["kind"].as_str() == Some("last_channel")
+            || delivery.is_null()
+            || !delivery.is_object();
+        if is_last_channel {
+            job["delivery"] = serde_json::json!({
+                "kind": "channel",
+                "channel": "telegram",
+                "to": sid
+            });
+        }
+    }
+
+    kh.cron_create(agent_id, job).await
 }
 
 async fn tool_cron_list(

@@ -101,6 +101,18 @@ pub trait ChannelBridgeHandle: Send + Sync {
     /// Send a message to an agent and get the text response.
     async fn send_message(&self, agent_id: AgentId, message: &str) -> Result<String, String>;
 
+    /// Send a message with sender identity so the agent knows who is talking.
+    async fn send_message_with_sender(
+        &self,
+        agent_id: AgentId,
+        message: &str,
+        sender_id: Option<String>,
+        sender_name: Option<String>,
+    ) -> Result<String, String> {
+        // Default: fall back to send_message (backwards compatible)
+        self.send_message(agent_id, message).await
+    }
+
     /// Send a message with structured content blocks (text + images) to an agent.
     ///
     /// Default implementation extracts text from blocks and falls back to `send_message()`.
@@ -823,8 +835,10 @@ async fn dispatch_message(
                             let t = text.clone();
                             let aid = *aid;
                             let name = name.clone();
+                            let sid = Some(message.sender.platform_id.clone());
+                            let sname = Some(message.sender.display_name.clone());
                             handles_vec.push(tokio::spawn(async move {
-                                let result = h.send_message(aid, &t).await;
+                                let result = h.send_message_with_sender(aid, &t, sid, sname).await;
                                 (name, aid, result)
                             }));
                         }
@@ -841,7 +855,12 @@ async fn dispatch_message(
                 openfang_types::config::BroadcastStrategy::Sequential => {
                     for (name, maybe_id) in &targets {
                         if let Some(aid) = maybe_id {
-                            match handle.send_message(*aid, &text).await {
+                            match handle.send_message_with_sender(
+                                *aid,
+                                &text,
+                                Some(message.sender.platform_id.clone()),
+                                Some(message.sender.display_name.clone()),
+                            ).await {
                                 Ok(r) => responses.push(format!("[{name}]: {r}")),
                                 Err(e) => responses.push(format!("[{name}]: Error: {e}")),
                             }
@@ -964,8 +983,15 @@ async fn dispatch_message(
         text.clone()
     };
 
-    // Send to agent and relay response
-    let result = handle.send_message(agent_id, &prefixed_text).await;
+    // Send to agent with sender identity so the agent knows who is talking.
+    let result = handle
+        .send_message_with_sender(
+            agent_id,
+            &prefixed_text,
+            Some(message.sender.platform_id.clone()),
+            Some(message.sender.display_name.clone()),
+        )
+        .await;
 
     // Stop the typing refresh now that we have a response
     typing_task.abort();
