@@ -2229,6 +2229,12 @@ async fn tool_cron_create(
         });
     }
 
+    // Default one_shot to true for one-time "at" schedules (reminders).
+    // Recurring schedules (every, cron) keep one_shot false.
+    if job["one_shot"].is_null() && job["schedule"]["kind"].as_str() == Some("at") {
+        job["one_shot"] = serde_json::json!(true);
+    }
+
     // If delivery is last_channel and we have a sender_id, replace with
     // explicit channel delivery to prevent multi-user race conditions.
     if let Some(sid) = sender_id {
