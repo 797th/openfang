@@ -344,6 +344,9 @@ pub async fn execute_tool(
         // System time tool
         "system_time" => Ok(tool_system_time()),
 
+        // Structured output tool — calls Ollama with JSON schema enforcement
+        "ollama_structured" => tool_ollama_structured(input).await,
+
         // Cron scheduling tools
         "cron_create" => tool_cron_create(input, kernel, caller_agent_id).await,
         "cron_list" => tool_cron_list(kernel, caller_agent_id).await,
@@ -1257,6 +1260,21 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "type": "object",
                 "properties": {},
                 "required": []
+            }),
+        },
+        // --- Structured output tool ---
+        ToolDefinition {
+            name: "ollama_structured".to_string(),
+            description: "Call Ollama with a JSON schema to get guaranteed structured output. Use this when you need precise computed values like timestamps, numbers, or classifications. Pass a prompt, optional system message, and a JSON schema. Returns JSON matching the schema.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "prompt": { "type": "string", "description": "The user prompt to send to the model" },
+                    "system": { "type": "string", "description": "Optional system prompt for context" },
+                    "schema": { "type": "object", "description": "JSON schema that the response must conform to" },
+                    "model": { "type": "string", "description": "Optional model override (default: gpt-oss:20b)" }
+                },
+                "required": ["prompt", "schema"]
             }),
         },
         // --- Canvas / A2UI tool ---
@@ -2743,6 +2761,67 @@ fn tool_system_time() -> String {
         "day_of_week": now_local.format("%A").to_string(),
     });
     serde_json::to_string_pretty(&result).unwrap_or_else(|_| now_utc.to_rfc3339())
+}
+
+// ---------------------------------------------------------------------------
+// Structured output tool — calls Ollama with JSON schema enforcement
+// ---------------------------------------------------------------------------
+
+async fn tool_ollama_structured(input: &serde_json::Value) -> Result<String, String> {
+    let prompt = input["prompt"]
+        .as_str()
+        .ok_or("Missing 'prompt' parameter")?;
+    let schema = input
+        .get("schema")
+        .ok_or("Missing 'schema' parameter")?;
+    let system = input["system"].as_str().unwrap_or("");
+    let model = input["model"].as_str().unwrap_or("gpt-oss:20b");
+
+    let ollama_url = std::env::var("OLLAMA_HOST")
+        .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+    let url = format!("{}/api/chat", ollama_url.trim_end_matches('/'));
+
+    let mut messages = Vec::new();
+    if !system.is_empty() {
+        messages.push(serde_json::json!({"role": "system", "content": system}));
+    }
+    messages.push(serde_json::json!({"role": "user", "content": prompt}));
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "format": schema,
+        "stream": false
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|e| format!("Ollama request failed: {e}"))?;
+
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read Ollama response: {e}"))?;
+
+    if !status.is_success() {
+        return Err(format!("Ollama returned {status}: {text}"));
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Failed to parse Ollama response: {e}"))?;
+
+    let content = parsed["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    Ok(content)
 }
 
 // ---------------------------------------------------------------------------
