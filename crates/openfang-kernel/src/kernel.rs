@@ -5522,9 +5522,26 @@ impl OpenFangKernel {
                 timeout_secs,
                 ..
             } => {
+                let delivery = job.delivery.clone();
+
+                // For Channel delivery (specific recipient), deliver the message
+                // directly without going through the LLM.
+                if matches!(delivery, openfang_types::scheduler::CronDelivery::Channel { .. }) {
+                    match cron_deliver_response(self, agent_id, message, &delivery).await {
+                        Ok(()) => {
+                            self.cron_scheduler.record_success(job_id);
+                            return Ok(message.clone());
+                        }
+                        Err(e) => {
+                            self.cron_scheduler.record_failure(job_id, &e);
+                            return Err(e);
+                        }
+                    }
+                }
+
+                // For other delivery types, go through the LLM.
                 let timeout_s = timeout_secs.unwrap_or(120);
                 let timeout = std::time::Duration::from_secs(timeout_s);
-                let delivery = job.delivery.clone();
                 let kh: Arc<dyn KernelHandle> = self.clone();
                 match tokio::time::timeout(
                     timeout,

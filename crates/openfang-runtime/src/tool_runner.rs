@@ -2212,15 +2212,31 @@ async fn tool_cron_create(
     let kh = require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Agent ID required for cron_create")?;
 
+    let mut job = input.clone();
+
+    // Normalize system_event to agent_turn so cron delivery works via Telegram.
+    // system_event only publishes to the internal event bus, not to channels.
+    if job["action"]["kind"].as_str() == Some("system_event") {
+        let text = job["action"]["text"].as_str()
+            .or_else(|| job["action"]["message"].as_str())
+            .or_else(|| job["action"]["description"].as_str())
+            .unwrap_or("Reminder")
+            .to_string();
+        job["action"] = serde_json::json!({
+            "kind": "agent_turn",
+            "message": text,
+            "timeout_secs": 300
+        });
+    }
+
     // If delivery is last_channel and we have a sender_id, replace with
     // explicit channel delivery to prevent multi-user race conditions.
-    let mut job = input.clone();
     if let Some(sid) = sender_id {
         let delivery = &job["delivery"];
-        let is_last_channel = delivery["kind"].as_str() == Some("last_channel")
-            || delivery.is_null()
-            || !delivery.is_object();
-        if is_last_channel {
+        let needs_replacement = delivery.is_null()
+            || !delivery.is_object()
+            || matches!(delivery["kind"].as_str(), Some("last_channel") | Some("none") | None);
+        if needs_replacement {
             job["delivery"] = serde_json::json!({
                 "kind": "channel",
                 "channel": "telegram",
