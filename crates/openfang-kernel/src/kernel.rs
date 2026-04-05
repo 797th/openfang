@@ -1668,6 +1668,23 @@ impl OpenFangKernel {
             .await
     }
 
+    /// Send a message with sender identity (channel bridges use this for multi-user support).
+    pub async fn send_message_with_sender(
+        &self,
+        agent_id: AgentId,
+        message: &str,
+        sender_id: Option<String>,
+        sender_name: Option<String>,
+    ) -> KernelResult<AgentLoopResult> {
+        let handle: Option<Arc<dyn KernelHandle>> = self
+            .self_handle
+            .get()
+            .and_then(|w| w.upgrade())
+            .map(|arc| arc as Arc<dyn KernelHandle>);
+        self.send_message_with_handle(agent_id, message, handle, sender_id, sender_name)
+            .await
+    }
+
     /// Send a multimodal message (text + images) to an agent and get a response.
     ///
     /// Used by channel bridges when a user sends a photo — the image is downloaded,
@@ -2093,7 +2110,7 @@ impl OpenFangKernel {
                         .format("%A, %B %d, %Y (%Y-%m-%d %H:%M %Z)")
                         .to_string(),
                 ),
-                sender_id,
+                sender_id: sender_id.clone(),
                 sender_name,
                 // Re-read context.md per turn by default so external writers
                 // (cron jobs, integrations) reach the LLM on the next message.
@@ -2201,6 +2218,7 @@ impl OpenFangKernel {
                 ctx_window,
                 Some(&kernel_clone.process_manager),
                 content_blocks,
+                sender_id,
             )
             .await;
 
@@ -2661,7 +2679,7 @@ impl OpenFangKernel {
                         .format("%A, %B %d, %Y (%Y-%m-%d %H:%M %Z)")
                         .to_string(),
                 ),
-                sender_id,
+                sender_id: sender_id.clone(),
                 sender_name,
                 // Re-read context.md per turn by default (#843).
                 context_md: manifest.workspace.as_ref().and_then(|w| {
@@ -2777,6 +2795,7 @@ impl OpenFangKernel {
             ctx_window,
             Some(&self.process_manager),
             content_blocks,
+            sender_id,
         )
         .await
         .map_err(KernelError::OpenFang)?;
