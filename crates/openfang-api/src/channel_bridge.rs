@@ -170,6 +170,14 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         Ok(agent_id)
     }
 
+    async fn set_delivery_context(&self, agent_id: AgentId, channel: &str, recipient: &str) {
+        let kv_val = serde_json::json!({"channel": channel, "recipient": recipient});
+        let _ = self
+            .kernel
+            .memory
+            .structured_set(agent_id, "delivery.last_channel", kv_val);
+    }
+
     async fn uptime_info(&self) -> String {
         let uptime = self.started_at.elapsed();
         let agents = self.list_agents().await.unwrap_or_default();

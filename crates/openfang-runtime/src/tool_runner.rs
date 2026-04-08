@@ -354,7 +354,7 @@ pub async fn execute_tool(
         "cron_cancel" => tool_cron_cancel(input, kernel).await,
 
         // Channel send tool (proactive outbound messaging)
-        "channel_send" => tool_channel_send(input, kernel, workspace_root).await,
+        "channel_send" => tool_channel_send(input, kernel, workspace_root, caller_agent_id).await,
 
         // Persistent process tools
         "process_start" => tool_process_start(input, process_manager, caller_agent_id).await,
@@ -2284,6 +2284,7 @@ async fn tool_channel_send(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     workspace_root: Option<&Path>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
 
@@ -2297,16 +2298,26 @@ async fn tool_channel_send(
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
 
-    // If recipient is empty, resolve from channel's default_chat_id config.
+    // If recipient is empty, resolve in order:
+    // 1. Channel's default_chat_id from config
+    // 2. Agent's delivery.last_channel from structured memory (set when user switches via /agent)
     let recipient = if recipient_input.is_empty() {
         let default_id = kh.get_channel_default_recipient(&channel).await;
         match default_id {
             Some(id) => id,
             None => {
-                return Err(format!(
-                "Missing 'recipient' parameter. Set default_chat_id in [channels.{channel}] config \
-                 or pass recipient explicitly."
-            ))
+                // Fallback: check agent's delivery.last_channel context
+                let last_channel = caller_agent_id
+                    .and_then(|aid| kh.get_delivery_context(aid, &channel));
+                match last_channel {
+                    Some(id) => id,
+                    None => {
+                        return Err(format!(
+                        "Missing 'recipient' parameter. Set default_chat_id in [channels.{channel}] config \
+                         or pass recipient explicitly."
+                        ))
+                    }
+                }
             }
         }
     } else {
