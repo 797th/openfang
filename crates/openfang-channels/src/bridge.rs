@@ -143,6 +143,13 @@ pub trait ChannelBridgeHandle: Send + Sync {
     /// Spawn an agent by manifest name, returning its ID.
     async fn spawn_agent_by_name(&self, manifest_name: &str) -> Result<AgentId, String>;
 
+    /// Set the delivery channel context for an agent so it knows where to
+    /// send proactive messages via `channel_send`. Called when a user
+    /// switches to a different agent via `/agent <name>`.
+    async fn set_delivery_context(&self, _agent_id: AgentId, _channel: &str, _recipient: &str) {
+        // Default no-op — real impl persists delivery.last_channel.
+    }
+
     /// Transcribe raw audio bytes to text.
     async fn transcribe_audio(
         &self,
@@ -857,15 +864,7 @@ async fn dispatch_message(
 
     // Handle commands first (early return)
     if let ChannelContent::Command { ref name, ref args } = message.content {
-        let result = handle_command(
-            name,
-            args,
-            handle,
-            router,
-            &message.sender,
-            sender_user_id(message),
-        )
-        .await;
+        let result = handle_command(name, args, handle, router, &message.sender, ct_str).await;
         send_response(adapter, &message.sender, result, thread_id, output_format).await;
         return;
     }
@@ -949,15 +948,7 @@ async fn dispatch_message(
         };
 
         if is_channel_command(cmd) {
-            let result = handle_command(
-                cmd,
-                &args,
-                handle,
-                router,
-                &message.sender,
-                sender_user_id(message),
-            )
-            .await;
+            let result = handle_command(cmd, &args, handle, router, &message.sender, ct_str).await;
             send_response(adapter, &message.sender, result, thread_id, output_format).await;
             return;
         }
@@ -1727,7 +1718,7 @@ async fn handle_command(
     handle: &Arc<dyn ChannelBridgeHandle>,
     router: &Arc<AgentRouter>,
     sender: &ChannelUser,
-    user_id: &str,
+    channel_name: &str,
 ) -> String {
     // Canonicalise through the unified command registry: aliases resolve to
     // their canonical name and matching is case-insensitive. If the command
@@ -1781,17 +1772,16 @@ async fn handle_command(
             let agent_name = &args[0];
             match handle.find_agent_by_name(agent_name).await {
                 Ok(Some(agent_id)) => {
-                    // Key on user_id (the param wired in by the Discord/Slack call sites
-                    // via sender_user_id(message)) — not sender.platform_id, which is the
-                    // channel ID on those adapters. Matches the read-path resolution.
-                    router.set_user_default(user_id.to_string(), agent_id);
+                    router.set_user_default(sender.platform_id.clone(), agent_id);
+                    handle.set_delivery_context(agent_id, channel_name, &sender.platform_id).await;
                     format!("Now talking to agent: {agent_name}")
                 }
                 Ok(None) => {
                     // Try to spawn it
                     match handle.spawn_agent_by_name(agent_name).await {
                         Ok(agent_id) => {
-                            router.set_user_default(user_id.to_string(), agent_id);
+                            router.set_user_default(sender.platform_id.clone(), agent_id);
+                            handle.set_delivery_context(agent_id, channel_name, &sender.platform_id).await;
                             format!("Spawned and connected to agent: {agent_name}")
                         }
                         Err(e) => {
@@ -2055,10 +2045,10 @@ mod tests {
             openfang_user: None,
         };
 
-        let result = handle_command("agents", &[], &handle, &router, &sender, "user1").await;
+        let result = handle_command("agents", &[], &handle, &router, &sender, "test").await;
         assert!(result.contains("coder"));
 
-        let result = handle_command("help", &[], &handle, &router, &sender, "user1").await;
+        let result = handle_command("help", &[], &handle, &router, &sender, "test").await;
         assert!(result.contains("/agents"));
     }
 
@@ -2076,15 +2066,8 @@ mod tests {
         };
 
         // Select existing agent
-        let result = handle_command(
-            "agent",
-            &["coder".to_string()],
-            &handle,
-            &router,
-            &sender,
-            "user1",
-        )
-        .await;
+        let result =
+            handle_command("agent", &["coder".to_string()], &handle, &router, &sender, "test").await;
         assert!(result.contains("Now talking to agent: coder"));
 
         // Verify router was updated
@@ -2147,7 +2130,7 @@ mod tests {
             openfang_user: None,
         };
 
-        let result = handle_command("agent", &[], &handle, &router, &sender, "user1").await;
+        let result = handle_command("agent", &[], &handle, &router, &sender, "test").await;
         assert!(result.contains("Usage: /agent <name>"));
         assert!(result.contains("coder"));
     }
