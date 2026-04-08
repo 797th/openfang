@@ -3404,10 +3404,10 @@ impl OpenFangKernel {
             }),
             // Autonomous hands must run in Continuous mode so the background loop picks them up.
             // Reactive (default) only fires on incoming messages, so autonomous hands would be inert.
-            // Default to 3600s (1 hour) to avoid wasting credits — see issue #848.
+            // Use HAND.toml check_interval_secs if set, otherwise default to 3600s (1 hour).
             schedule: if def.agent.max_iterations.is_some() {
                 ScheduleMode::Continuous {
-                    check_interval_secs: 3600,
+                    check_interval_secs: def.agent.check_interval_secs.unwrap_or(3600),
                 }
             } else {
                 ScheduleMode::default()
@@ -6392,6 +6392,17 @@ impl KernelHandle for OpenFangKernel {
                 .default_channel_id
                 .clone(),
             _ => None,
+        }
+    }
+
+    fn get_delivery_context(&self, agent_id: &str, channel: &str) -> Option<String> {
+        let aid: AgentId = agent_id.parse().ok()?;
+        let val = self.memory.structured_get(aid, "delivery.last_channel").ok()??;
+        let stored_channel = val["channel"].as_str()?;
+        if stored_channel == channel {
+            val["recipient"].as_str().map(|s| s.to_string())
+        } else {
+            None
         }
     }
 
