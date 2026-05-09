@@ -1796,7 +1796,7 @@ async fn handle_command(
             // Need to resolve the user's current agent
             let agent_id = router.resolve(
                 &crate::types::ChannelType::CLI,
-                user_id,
+                sender.platform_id.as_str(),
                 sender.openfang_user.as_deref(),
             );
             match agent_id {
@@ -1810,7 +1810,7 @@ async fn handle_command(
         "compact" => {
             let agent_id = router.resolve(
                 &crate::types::ChannelType::CLI,
-                user_id,
+                sender.platform_id.as_str(),
                 sender.openfang_user.as_deref(),
             );
             match agent_id {
@@ -1824,7 +1824,7 @@ async fn handle_command(
         "model" => {
             let agent_id = router.resolve(
                 &crate::types::ChannelType::CLI,
-                user_id,
+                sender.platform_id.as_str(),
                 sender.openfang_user.as_deref(),
             );
             match agent_id {
@@ -1848,7 +1848,7 @@ async fn handle_command(
         "stop" => {
             let agent_id = router.resolve(
                 &crate::types::ChannelType::CLI,
-                user_id,
+                sender.platform_id.as_str(),
                 sender.openfang_user.as_deref(),
             );
             match agent_id {
@@ -1862,7 +1862,7 @@ async fn handle_command(
         "usage" => {
             let agent_id = router.resolve(
                 &crate::types::ChannelType::CLI,
-                user_id,
+                sender.platform_id.as_str(),
                 sender.openfang_user.as_deref(),
             );
             match agent_id {
@@ -1876,7 +1876,7 @@ async fn handle_command(
         "think" => {
             let agent_id = router.resolve(
                 &crate::types::ChannelType::CLI,
-                user_id,
+                sender.platform_id.as_str(),
                 sender.openfang_user.as_deref(),
             );
             match agent_id {
