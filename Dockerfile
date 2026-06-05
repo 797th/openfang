@@ -30,5 +30,5 @@ COPY --from=builder /build/agents /opt/openfang/agents
 EXPOSE 4200
 VOLUME /data
 ENV OPENFANG_HOME=/data
-ENTRYPOINT ["openfang"]
+ENTRYPOINT ["/bin/sh","-c","mkdir -p /data/agents && cp -rn /opt/openfang/agents/. /data/agents/ 2>/dev/null || true; exec openfang \"$@\"","--"]
 CMD ["start"]
