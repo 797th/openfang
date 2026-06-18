@@ -31,10 +31,12 @@ COPY --from=builder /build/target/release/openfang /usr/local/bin/
 COPY deploy/agents /opt/openfang/agents
 # Baked default config (seeded to the data volume on first boot if absent).
 COPY deploy/config.default.toml /opt/openfang/config.toml
+# Entrypoint: seeds baked agents + default config onto the data volume on first
+# boot (with diagnostic logging), then execs the daemon. See deploy/entrypoint.sh.
+COPY deploy/entrypoint.sh /usr/local/bin/openfang-entrypoint.sh
+RUN chmod +x /usr/local/bin/openfang-entrypoint.sh
 EXPOSE 4200
 VOLUME /data
 ENV OPENFANG_HOME=/data
-# On boot: seed baked agents into the PVC, and seed the default config if the
-# volume has none yet. Existing files on the volume are never overwritten.
-ENTRYPOINT ["/bin/sh","-c","mkdir -p /data/agents && cp -rn /opt/openfang/agents/. /data/agents/ 2>/dev/null || true; [ -f /data/config.toml ] || cp /opt/openfang/config.toml /data/config.toml 2>/dev/null || true; exec openfang \"$@\"","--"]
+ENTRYPOINT ["/usr/local/bin/openfang-entrypoint.sh"]
 CMD ["start"]
