@@ -1,0 +1,28 @@
+# OpenFang — baked default configuration.
+#
+# This file is copied into the image at /opt/openfang/config.toml and seeded
+# to $OPENFANG_HOME/config.toml (/data/config.toml) on first container boot,
+# ONLY if no config already exists on the data volume. A config already present
+# on the PVC is never overwritten.
+#
+# Secrets are referenced by environment-variable NAME, never stored here.
+# Required env vars in the deployment:
+#   NVIDIA_API_KEY      — powers the default model
+#   TELEGRAM_BOT_TOKEN  — Telegram bot token from @BotFather
+
+# Bind on all interfaces so the dashboard/API is reachable inside the cluster.
+# Can be overridden at runtime with OPENFANG_LISTEN.
+api_listen = "0.0.0.0:4200"
+
+[default_model]
+provider = "nvidia"
+model = "stepfun-ai/step-3.7-flash"
+api_key_env = "NVIDIA_API_KEY"
+
+[memory]
+decay_rate = 0.05
+
+[channels.telegram]
+bot_token_env = "TELEGRAM_BOT_TOKEN"
+default_agent = "Dewansh"
+poll_interval_secs = 1

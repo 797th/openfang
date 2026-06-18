@@ -1394,6 +1394,61 @@ impl OpenFangKernel {
             }
         }
 
+        // Seed agents defined on disk on FIRST boot of a fresh data volume.
+        //
+        // This is how baked agents (seeded into <home>/agents/<name>/agent.toml
+        // by the container entrypoint) get registered when the PVC is brand new.
+        // The DB-restore loop above only *updates* agents that already exist in
+        // the DB from their on-disk TOML; it never creates new ones, so without
+        // this step a freshly-provisioned volume would come up with no agents.
+        //
+        // Gated on an empty DB so it behaves like a one-time seed: once the
+        // agents are persisted, deleting one via the API is permanent (it won't
+        // be resurrected from its leftover on-disk TOML on the next boot), and
+        // existing installs are never force-populated with bundled templates.
+        let db_was_empty = kernel.registry.list().is_empty();
+        let agents_dir = kernel.config.home_dir.join("agents");
+        if db_was_empty {
+            if let Ok(dir_entries) = std::fs::read_dir(&agents_dir) {
+                let existing: std::collections::HashSet<String> = kernel
+                    .registry
+                    .list()
+                    .iter()
+                    .map(|e| e.name.clone())
+                    .collect();
+                for dir_entry in dir_entries.flatten() {
+                    if !dir_entry.path().is_dir() {
+                        continue;
+                    }
+                    let toml_path = dir_entry.path().join("agent.toml");
+                    if !toml_path.exists() {
+                        continue;
+                    }
+                    let manifest = match std::fs::read_to_string(&toml_path) {
+                        Ok(s) => match toml::from_str::<openfang_types::agent::AgentManifest>(&s) {
+                            Ok(m) => m,
+                            Err(e) => {
+                                warn!(path = %toml_path.display(), "Invalid agent TOML on disk, skipping import: {e}");
+                                continue;
+                            }
+                        },
+                        Err(e) => {
+                            warn!(path = %toml_path.display(), "Failed to read agent TOML, skipping import: {e}");
+                            continue;
+                        }
+                    };
+                    if manifest.name.is_empty() || existing.contains(&manifest.name) {
+                        continue;
+                    }
+                    info!(agent = %manifest.name, "Importing agent from disk (not present in DB)");
+                    match kernel.spawn_agent(manifest) {
+                        Ok(id) => info!(id = %id, "Imported agent from disk"),
+                        Err(e) => warn!("Failed to import agent from disk: {e}"),
+                    }
+                }
+            }
+        }
+
         // If no agents exist (fresh install), spawn a default assistant
         if kernel.registry.list().is_empty() {
             info!("No agents found — spawning default assistant");
@@ -6140,7 +6195,10 @@ impl OpenFangKernel {
 
                 // For Channel delivery (specific recipient), deliver the message
                 // directly without going through the LLM.
-                if matches!(delivery, openfang_types::scheduler::CronDelivery::Channel { .. }) {
+                if matches!(
+                    delivery,
+                    openfang_types::scheduler::CronDelivery::Channel { .. }
+                ) {
                     match cron_deliver_response(self, agent_id, message, &delivery).await {
                         Ok(()) => {
                             self.cron_scheduler.record_success(job_id);
@@ -7192,7 +7250,10 @@ impl KernelHandle for OpenFangKernel {
 
     fn get_delivery_context(&self, agent_id: &str, channel: &str) -> Option<String> {
         let aid: AgentId = agent_id.parse().ok()?;
-        let val = self.memory.structured_get(aid, "delivery.last_channel").ok()??;
+        let val = self
+            .memory
+            .structured_get(aid, "delivery.last_channel")
+            .ok()??;
         let stored_channel = val["channel"].as_str()?;
         if stored_channel == channel {
             val["recipient"].as_str().map(|s| s.to_string())
@@ -7568,8 +7629,7 @@ mod tests {
 
         assert_eq!(merged.description, "new", "TOML edits must apply");
         assert_eq!(
-            merged.workspace,
-            entry.workspace,
+            merged.workspace, entry.workspace,
             "kernel-assigned workspace must survive a TOML edit that omits it"
         );
         assert!(
@@ -8231,7 +8291,8 @@ mod tests {
             "fallback timeout edits must be hot-reloadable"
         );
         assert!(
-            plan.hot_actions.contains(&HotAction::ReloadFallbackProviders),
+            plan.hot_actions
+                .contains(&HotAction::ReloadFallbackProviders),
             "ReloadFallbackProviders must be present in the plan"
         );
 
