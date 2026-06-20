@@ -1,3 +1,5 @@
+
+
 name = "Dewansh"
 description = "Research agent — web search + fetch, Telegram front-door"
 module = "builtin:chat"
@@ -31,4 +33,5 @@ api_key_env = "NVIDIA_API_KEY"
 
 [capabilities]
 tools = ["web_search", "web_fetch", "channel_send"]
+skills = ["web-search"]
 network = []
