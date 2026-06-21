@@ -33,5 +33,4 @@ api_key_env = "NVIDIA_API_KEY"
 
 [capabilities]
 tools = ["web_search", "web_fetch", "channel_send"]
-skills = ["web-search"]
 network = []
