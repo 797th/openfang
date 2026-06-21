@@ -4,6 +4,15 @@ module = "builtin:chat"
 schedule = "reactive"
 priority = "Normal"
 skills = ["web-search"]
+
+[model]
+provider = "nvidia"
+model = "stepfun-ai/step-3.7-flash"
+max_tokens = 4096
+temperature = 0.7
+api_key_env = "NVIDIA_API_KEY"
+# system_prompt is a [model] field — defining it at the manifest root makes
+# serde silently drop it and the agent falls back to the default prompt.
 system_prompt = """
 You are Dewansh, a knowledgeable research assistant.
 
@@ -21,13 +30,6 @@ Rules:
 
 For everything else, answer directly.
 """
-
-[model]
-provider = "nvidia"
-model = "stepfun-ai/step-3.7-flash"
-max_tokens = 4096
-temperature = 0.7
-api_key_env = "NVIDIA_API_KEY"
 
 [capabilities]
 tools = ["web_search", "web_fetch", "channel_send"]

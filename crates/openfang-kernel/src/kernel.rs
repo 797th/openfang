@@ -1402,15 +1402,18 @@ impl OpenFangKernel {
         // the DB from their on-disk TOML; it never creates new ones, so without
         // this step a freshly-provisioned volume would come up with no agents.
         //
-        // Gated on an empty DB so it behaves like a one-time seed: once the
-        // agents are persisted, deleting one via the API is permanent (it won't
-        // be resurrected from its leftover on-disk TOML on the next boot), and
+        // "One-time" is enforced by a marker file persisted next to the data,
+        // NOT purely by an empty registry. Gating on emptiness alone would
+        // resurrect baked agents whenever an operator deletes every agent via
+        // the API but leaves the on-disk TOML in place (e.g. re-seeded by the
+        // container entrypoint on each boot). The marker lives on the data
+        // volume, so once seeding has run those deletions stay deleted, and
         // existing installs are never force-populated with bundled templates.
-        let db_was_empty = kernel.registry.list().is_empty();
         let agents_dir = kernel.config.home_dir.join("agents");
-        if db_was_empty {
+        let seed_marker = kernel.config.home_dir.join(".agents_seeded");
+        if !seed_marker.exists() && kernel.registry.list().is_empty() {
             if let Ok(dir_entries) = std::fs::read_dir(&agents_dir) {
-                let existing: std::collections::HashSet<String> = kernel
+                let mut existing: std::collections::HashSet<String> = kernel
                     .registry
                     .list()
                     .iter()
@@ -1437,7 +1440,9 @@ impl OpenFangKernel {
                             continue;
                         }
                     };
-                    if manifest.name.is_empty() || existing.contains(&manifest.name) {
+                    // insert() returns false if the name was already seen this
+                    // cycle, so two disk manifests sharing a name can't both spawn.
+                    if manifest.name.trim().is_empty() || !existing.insert(manifest.name.clone()) {
                         continue;
                     }
                     info!(agent = %manifest.name, "Importing agent from disk (not present in DB)");
@@ -1445,6 +1450,12 @@ impl OpenFangKernel {
                         Ok(id) => info!(id = %id, "Imported agent from disk"),
                         Err(e) => warn!("Failed to import agent from disk: {e}"),
                     }
+                }
+                // Record that the one-time seed has run. Only written once we
+                // successfully scanned the agents dir, so a directory that
+                // appears later can still seed on a subsequent boot.
+                if let Err(e) = std::fs::write(&seed_marker, b"seeded\n") {
+                    warn!(path = %seed_marker.display(), "Failed to write agent seed marker: {e}");
                 }
             }
         }
