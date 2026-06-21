@@ -48,3 +48,12 @@ Thumbs.db
 
 # Personal deploy scripts
 scripts/deploy-remote.sh
+.gstack/
+
+# Local daemon runtime & debugging artifacts
+daemon_out.log
+daemon_err.log
+build_log.txt
+body.html
+dash.html
+headers.txt
