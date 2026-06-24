@@ -107,8 +107,8 @@ pub trait ChannelBridgeHandle: Send + Sync {
         &self,
         agent_id: AgentId,
         message: &str,
-        sender_id: Option<String>,
-        sender_name: Option<String>,
+        _sender_id: Option<String>,
+        _sender_name: Option<String>,
     ) -> Result<String, String> {
         // Default: fall back to send_message (backwards compatible)
         self.send_message(agent_id, message).await
@@ -1728,6 +1728,32 @@ async fn handle_command(
         .filter(|def| def.surfaces.contains(Surfaces::CHANNEL))
         .map(|def| def.name)
         .unwrap_or(name);
+
+    // Exclusive single-purpose bots are locked to one agent: never expose the
+    // agent roster or allow switching. Other session commands (/new, /compact,
+    // /model, …) still apply and resolve to that one agent via the router.
+    if let Some(ex_id) = router.exclusive_agent_str(channel_name) {
+        match canonical {
+            "start" | "help" => {
+                let agent = resolve_agent_name(handle, ex_id)
+                    .await
+                    .unwrap_or_else(|| "your assistant".to_string());
+                return format!(
+                    "Hi! You're talking to {agent}. Just send your request and I'll respond — no agent selection needed."
+                );
+            }
+            "agents" | "agent" => {
+                let agent = resolve_agent_name(handle, ex_id)
+                    .await
+                    .unwrap_or_else(|| "a single dedicated agent".to_string());
+                return format!(
+                    "This bot is dedicated to {agent}. Agent switching is disabled here."
+                );
+            }
+            _ => {}
+        }
+    }
+
     match canonical {
         "start" => {
             let agents = handle.list_agents().await.unwrap_or_default();

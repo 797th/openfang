@@ -1187,6 +1187,9 @@ pub async fn start_channel_bridge_with_config(
 
     // Collect all adapters to start
     let mut adapters: Vec<(Arc<dyn ChannelAdapter>, Option<String>)> = Vec::new();
+    // Channel keys (Debug form, e.g. "Telegram") whose bot is locked to its
+    // single `default_agent`. Applied to the router after agent IDs resolve.
+    let mut exclusive_channels: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Telegram
     if let Some(ref tg_config) = config.telegram {
@@ -1198,6 +1201,13 @@ pub async fn start_channel_bridge_with_config(
                 poll_interval,
                 tg_config.api_url.clone(),
             ));
+            if tg_config.exclusive_agent {
+                if tg_config.default_agent.is_some() {
+                    exclusive_channels.insert(format!("{:?}", adapter.channel_type()));
+                } else {
+                    warn!("Telegram exclusive_agent is set but default_agent is empty — ignoring exclusive lock");
+                }
+            }
             adapters.push((adapter, tg_config.default_agent.clone()));
         }
     }
@@ -1796,7 +1806,15 @@ pub async fn start_channel_bridge_with_config(
                     "{} default agent: {name} ({agent_id}) [channel: {channel_key}]",
                     adapter.name()
                 );
-                router.set_channel_default_with_name(channel_key, agent_id, name.clone());
+                router.set_channel_default_with_name(channel_key.clone(), agent_id, name.clone());
+                // Lock this bot to the single agent if exclusive mode is on.
+                if exclusive_channels.contains(&channel_key) {
+                    router.set_exclusive_agent(&adapter.channel_type(), agent_id);
+                    info!(
+                        "{} locked to exclusive agent: {name} ({agent_id}) — agent switching disabled",
+                        adapter.name()
+                    );
+                }
                 // First configured default also becomes system-wide fallback
                 if !system_default_set {
                     router.set_default(agent_id);

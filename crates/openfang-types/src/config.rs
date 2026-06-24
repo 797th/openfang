@@ -1839,6 +1839,14 @@ pub struct TelegramConfig {
     /// Allows channel_send(channel="telegram", message="...") without a recipient.
     #[serde(default)]
     pub default_chat_id: Option<String>,
+    /// Lock this bot to `default_agent` only. When true, every message routes to
+    /// that single agent regardless of bindings/user selection, and the
+    /// multi-agent discovery/switching commands (`/agents`, `/agent <name>`) and
+    /// the agent-list welcome are disabled — so a dedicated single-purpose bot
+    /// never exposes or lets users switch to other agents. Requires
+    /// `default_agent` to be set.
+    #[serde(default)]
+    pub exclusive_agent: bool,
     /// Per-channel behavior overrides.
     #[serde(default)]
     pub overrides: ChannelOverrides,
@@ -1853,6 +1861,7 @@ impl Default for TelegramConfig {
             poll_interval_secs: 1,
             api_url: None,
             default_chat_id: None,
+            exclusive_agent: false,
             overrides: ChannelOverrides::default(),
         }
     }
