@@ -4,9 +4,9 @@
 #   ENVIRONMENT         e.g. "test"
 #   DOMAIN              e.g. "748th"
 #   IMAGE_TAG           e.g. "v0.0.2"
-#   DOCKER_CONFIG_JSON  raw docker config JSON for the pull secret
-#   NVIDIA_API_KEY      powers the Dewansh agent
-#   TELEGRAM_BOT_TOKEN  bot token from @BotFather
+#   DOCKER_CONFIG_JSON      raw docker config JSON for the pull secret
+#   NVIDIA_API_KEY          powers the agents
+#   TELEGRAM_BOT_TOKEN_EBAY bot token (@openfang_ebay_1_bot) for the EbayWatcher bot
 #
 # NOTE: the image registry host (employee-harbor.748th.com) is hardcoded on
 # purpose — it matches the verified push target. Do NOT rebuild it from
@@ -31,7 +31,7 @@ type: kubernetes.io/dockerconfigjson
 stringData:
   .dockerconfigjson: ${DOCKER_CONFIG_JSON}
 ---
-# Secrets for the Dewansh agent + Telegram bot. Injected by CI (envsubst).
+# Secrets for the agents + Telegram bot. Injected by CI (envsubst).
 apiVersion: v1
 kind: Secret
 metadata:
@@ -40,7 +40,7 @@ metadata:
 type: Opaque
 stringData:
   NVIDIA_API_KEY: ${NVIDIA_API_KEY}
-  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+  TELEGRAM_BOT_TOKEN_EBAY: ${TELEGRAM_BOT_TOKEN_EBAY}
 ---
 apiVersion: apps/v1
 kind: Deployment

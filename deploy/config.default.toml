@@ -7,8 +7,8 @@
 #
 # Secrets are referenced by environment-variable NAME, never stored here.
 # Required env vars in the deployment:
-#   NVIDIA_API_KEY      — powers the default model
-#   TELEGRAM_BOT_TOKEN  — Telegram bot token from @BotFather
+#   NVIDIA_API_KEY          — powers the default model + agents
+#   TELEGRAM_BOT_TOKEN_EBAY — Telegram token (@openfang_ebay_1_bot) for the EbayWatcher bot
 
 # Bind on all interfaces so the dashboard/API is reachable inside the cluster.
 # Can be overridden at runtime with OPENFANG_LISTEN.
@@ -22,7 +22,12 @@ api_key_env = "NVIDIA_API_KEY"
 [memory]
 decay_rate = 0.05
 
+# The Telegram bot is dedicated to EbayWatcher: exclusive_agent locks it to that
+# one agent, so the bot never exposes or lets users switch to other agents
+# (Dewansh/assistant remain available via the dashboard/API). To route Telegram
+# to a different agent instead, change default_agent and drop exclusive_agent.
 [channels.telegram]
-bot_token_env = "TELEGRAM_BOT_TOKEN"
-default_agent = "Dewansh"
+bot_token_env = "TELEGRAM_BOT_TOKEN_EBAY"
+default_agent = "EbayWatcher"
+exclusive_agent = true
 poll_interval_secs = 1
