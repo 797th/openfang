@@ -15,15 +15,27 @@ ENV CARGO_PROFILE_RELEASE_LTO=${LTO} \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=${CODEGEN_UNITS}
 RUN cargo build --release --bin openfang
 
-FROM rust:1-slim-bookworm
+# Runtime: plain Debian slim (NOT the rust image) so the production image ships
+# no compiler/toolchain. libssl3 is the runtime half of the builder's libssl-dev
+# (the binary links OpenSSL dynamically); python/node are needed by skills.
+FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    libssl3 \
     python3 \
     python3-pip \
     python3-venv \
     nodejs \
     npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Non-root runtime user (uid/gid 1000). The app writes everything under
+# OPENFANG_HOME (/data) — provided by the PVC and made group-writable via the
+# pod's fsGroup: 1000 — so no rootfs writes are needed. HOME=/data keeps pip/npm
+# caches on the volume too.
+RUN useradd --uid 1000 --user-group --home-dir /data --shell /usr/sbin/nologin openfang \
+    && mkdir -p /data \
+    && chown -R 1000:1000 /data
 
 COPY --from=builder /build/target/release/openfang /usr/local/bin/
 # Baked agents seeded to the data volume on first boot (Dewansh + assistant).
@@ -37,6 +49,8 @@ COPY deploy/entrypoint.sh /usr/local/bin/openfang-entrypoint.sh
 RUN chmod +x /usr/local/bin/openfang-entrypoint.sh
 EXPOSE 4200
 VOLUME /data
-ENV OPENFANG_HOME=/data
+ENV OPENFANG_HOME=/data \
+    HOME=/data
+USER 1000
 ENTRYPOINT ["/usr/local/bin/openfang-entrypoint.sh"]
 CMD ["start"]
