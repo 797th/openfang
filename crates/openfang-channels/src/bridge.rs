@@ -1014,12 +1014,15 @@ async fn dispatch_message(
                 openfang_types::config::BroadcastStrategy::Sequential => {
                     for (name, maybe_id) in &targets {
                         if let Some(aid) = maybe_id {
-                            match handle.send_message_with_sender(
-                                *aid,
-                                &text,
-                                Some(message.sender.platform_id.clone()),
-                                Some(message.sender.display_name.clone()),
-                            ).await {
+                            match handle
+                                .send_message_with_sender(
+                                    *aid,
+                                    &text,
+                                    Some(message.sender.platform_id.clone()),
+                                    Some(message.sender.display_name.clone()),
+                                )
+                                .await
+                            {
                                 Ok(r) => responses.push(format!("[{name}]: {r}")),
                                 Err(e) => responses.push(format!("[{name}]: Error: {e}")),
                             }
@@ -1799,7 +1802,9 @@ async fn handle_command(
             match handle.find_agent_by_name(agent_name).await {
                 Ok(Some(agent_id)) => {
                     router.set_user_default(sender.platform_id.clone(), agent_id);
-                    handle.set_delivery_context(agent_id, channel_name, &sender.platform_id).await;
+                    handle
+                        .set_delivery_context(agent_id, channel_name, &sender.platform_id)
+                        .await;
                     format!("Now talking to agent: {agent_name}")
                 }
                 Ok(None) => {
@@ -1807,7 +1812,9 @@ async fn handle_command(
                     match handle.spawn_agent_by_name(agent_name).await {
                         Ok(agent_id) => {
                             router.set_user_default(sender.platform_id.clone(), agent_id);
-                            handle.set_delivery_context(agent_id, channel_name, &sender.platform_id).await;
+                            handle
+                                .set_delivery_context(agent_id, channel_name, &sender.platform_id)
+                                .await;
                             format!("Spawned and connected to agent: {agent_name}")
                         }
                         Err(e) => {
@@ -2092,8 +2099,15 @@ mod tests {
         };
 
         // Select existing agent
-        let result =
-            handle_command("agent", &["coder".to_string()], &handle, &router, &sender, "test").await;
+        let result = handle_command(
+            "agent",
+            &["coder".to_string()],
+            &handle,
+            &router,
+            &sender,
+            "test",
+        )
+        .await;
         assert!(result.contains("Now talking to agent: coder"));
 
         // Verify router was updated

@@ -1189,7 +1189,8 @@ pub async fn start_channel_bridge_with_config(
     let mut adapters: Vec<(Arc<dyn ChannelAdapter>, Option<String>)> = Vec::new();
     // Channel keys (Debug form, e.g. "Telegram") whose bot is locked to its
     // single `default_agent`. Applied to the router after agent IDs resolve.
-    let mut exclusive_channels: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut exclusive_channels: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     // Telegram
     if let Some(ref tg_config) = config.telegram {
