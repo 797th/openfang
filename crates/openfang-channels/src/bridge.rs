@@ -864,7 +864,16 @@ async fn dispatch_message(
 
     // Handle commands first (early return)
     if let ChannelContent::Command { ref name, ref args } = message.content {
-        let result = handle_command(name, args, handle, router, &message.sender, ct_str).await;
+        let result = handle_command(
+            name,
+            args,
+            handle,
+            router,
+            &message.sender,
+            ct_str,
+            sender_user_id(message),
+        )
+        .await;
         send_response(adapter, &message.sender, result, thread_id, output_format).await;
         return;
     }
@@ -948,7 +957,16 @@ async fn dispatch_message(
         };
 
         if is_channel_command(cmd) {
-            let result = handle_command(cmd, &args, handle, router, &message.sender, ct_str).await;
+            let result = handle_command(
+                cmd,
+                &args,
+                handle,
+                router,
+                &message.sender,
+                ct_str,
+                sender_user_id(message),
+            )
+            .await;
             send_response(adapter, &message.sender, result, thread_id, output_format).await;
             return;
         }
@@ -1722,6 +1740,7 @@ async fn handle_command(
     router: &Arc<AgentRouter>,
     sender: &ChannelUser,
     channel_name: &str,
+    user_id: &str,
 ) -> String {
     // Canonicalise through the unified command registry: aliases resolve to
     // their canonical name and matching is case-insensitive. If the command
@@ -1801,7 +1820,10 @@ async fn handle_command(
             let agent_name = &args[0];
             match handle.find_agent_by_name(agent_name).await {
                 Ok(Some(agent_id)) => {
-                    router.set_user_default(sender.platform_id.clone(), agent_id);
+                    // Key the default on user_id (the per-user routing key wired in by
+                    // the Discord/Slack call sites via sender_user_id(message)) — not
+                    // sender.platform_id, which is the channel ID on those adapters.
+                    router.set_user_default(user_id.to_string(), agent_id);
                     handle
                         .set_delivery_context(agent_id, channel_name, &sender.platform_id)
                         .await;
@@ -1811,7 +1833,7 @@ async fn handle_command(
                     // Try to spawn it
                     match handle.spawn_agent_by_name(agent_name).await {
                         Ok(agent_id) => {
-                            router.set_user_default(sender.platform_id.clone(), agent_id);
+                            router.set_user_default(user_id.to_string(), agent_id);
                             handle
                                 .set_delivery_context(agent_id, channel_name, &sender.platform_id)
                                 .await;
@@ -1829,7 +1851,7 @@ async fn handle_command(
             // Need to resolve the user's current agent
             let agent_id = router.resolve(
                 &crate::types::ChannelType::CLI,
-                sender.platform_id.as_str(),
+                user_id,
                 sender.openfang_user.as_deref(),
             );
             match agent_id {
@@ -1843,7 +1865,7 @@ async fn handle_command(
         "compact" => {
             let agent_id = router.resolve(
                 &crate::types::ChannelType::CLI,
-                sender.platform_id.as_str(),
+                user_id,
                 sender.openfang_user.as_deref(),
             );
             match agent_id {
@@ -1857,7 +1879,7 @@ async fn handle_command(
         "model" => {
             let agent_id = router.resolve(
                 &crate::types::ChannelType::CLI,
-                sender.platform_id.as_str(),
+                user_id,
                 sender.openfang_user.as_deref(),
             );
             match agent_id {
@@ -1881,7 +1903,7 @@ async fn handle_command(
         "stop" => {
             let agent_id = router.resolve(
                 &crate::types::ChannelType::CLI,
-                sender.platform_id.as_str(),
+                user_id,
                 sender.openfang_user.as_deref(),
             );
             match agent_id {
@@ -1895,7 +1917,7 @@ async fn handle_command(
         "usage" => {
             let agent_id = router.resolve(
                 &crate::types::ChannelType::CLI,
-                sender.platform_id.as_str(),
+                user_id,
                 sender.openfang_user.as_deref(),
             );
             match agent_id {
@@ -1909,7 +1931,7 @@ async fn handle_command(
         "think" => {
             let agent_id = router.resolve(
                 &crate::types::ChannelType::CLI,
-                sender.platform_id.as_str(),
+                user_id,
                 sender.openfang_user.as_deref(),
             );
             match agent_id {
@@ -2078,10 +2100,11 @@ mod tests {
             openfang_user: None,
         };
 
-        let result = handle_command("agents", &[], &handle, &router, &sender, "test").await;
+        let result =
+            handle_command("agents", &[], &handle, &router, &sender, "test", "user1").await;
         assert!(result.contains("coder"));
 
-        let result = handle_command("help", &[], &handle, &router, &sender, "test").await;
+        let result = handle_command("help", &[], &handle, &router, &sender, "test", "user1").await;
         assert!(result.contains("/agents"));
     }
 
@@ -2098,7 +2121,8 @@ mod tests {
             openfang_user: None,
         };
 
-        // Select existing agent
+        // Select existing agent. Telegram-shape: platform_id IS the user, so the
+        // user_id routing key equals the platform_id here.
         let result = handle_command(
             "agent",
             &["coder".to_string()],
@@ -2106,6 +2130,7 @@ mod tests {
             &router,
             &sender,
             "test",
+            "user1",
         )
         .await;
         assert!(result.contains("Now talking to agent: coder"));
@@ -2140,6 +2165,7 @@ mod tests {
             &handle,
             &router,
             &sender,
+            "discord",
             user_id,
         )
         .await;
@@ -2170,7 +2196,7 @@ mod tests {
             openfang_user: None,
         };
 
-        let result = handle_command("agent", &[], &handle, &router, &sender, "test").await;
+        let result = handle_command("agent", &[], &handle, &router, &sender, "test", "user1").await;
         assert!(result.contains("Usage: /agent <name>"));
         assert!(result.contains("coder"));
     }
