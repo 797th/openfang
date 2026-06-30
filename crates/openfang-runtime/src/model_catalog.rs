@@ -1022,10 +1022,7 @@ fn builtin_aliases() -> HashMap<String, String> {
         ),
         ("free", "openrouter/meta-llama/llama-3.3-70b-instruct:free"),
         ("free-reasoning", "openrouter/deepseek/deepseek-r1:free"),
-        (
-            "openrouter/free-coder",
-            "openrouter/qwen/qwen3-coder:free",
-        ),
+        ("openrouter/free-coder", "openrouter/qwen/qwen3-coder:free"),
         (
             "openrouter/free-large",
             "openrouter/openai/gpt-oss-120b:free",
@@ -4611,9 +4608,9 @@ mod tests {
     #[test]
     fn test_openrouter_free_alias_supports_tools() {
         let catalog = ModelCatalog::new();
-        let entry = catalog.find_model("openrouter/free").expect(
-            "openrouter/free alias must resolve to a known model",
-        );
+        let entry = catalog
+            .find_model("openrouter/free")
+            .expect("openrouter/free alias must resolve to a known model");
         assert_eq!(entry.provider, "openrouter");
         assert!(
             entry.supports_tools,
@@ -4626,9 +4623,7 @@ mod tests {
     #[test]
     fn test_openrouter_free_short_alias_supports_tools() {
         let catalog = ModelCatalog::new();
-        let entry = catalog
-            .find_model("free")
-            .expect("free alias must resolve");
+        let entry = catalog.find_model("free").expect("free alias must resolve");
         assert_eq!(entry.provider, "openrouter");
         assert!(
             entry.supports_tools,

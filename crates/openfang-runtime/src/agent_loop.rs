@@ -3206,7 +3206,9 @@ mod tests {
         assert_eq!(blocks.len(), 2, "must preserve thinking + text");
         match &blocks[0] {
             ContentBlock::Thinking {
-                thinking, signature, ..
+                thinking,
+                signature,
+                ..
             } => {
                 assert_eq!(thinking, "Let me reason carefully...");
                 assert_eq!(signature.as_deref(), Some("sig_anthropic_xyz"));

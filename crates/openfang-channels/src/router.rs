@@ -492,7 +492,10 @@ mod tests {
             Some(user_agent)
         );
         // Lookup helpers agree.
-        assert_eq!(router.exclusive_agent(&ChannelType::Telegram), Some(exclusive));
+        assert_eq!(
+            router.exclusive_agent(&ChannelType::Telegram),
+            Some(exclusive)
+        );
         assert_eq!(router.exclusive_agent_str("telegram"), Some(exclusive));
         assert_eq!(router.exclusive_agent(&ChannelType::Discord), None);
     }
@@ -796,7 +799,8 @@ mod tests {
         assert_eq!(resolved, None);
 
         // Missing channel_id on the wire — no match (the binding is restrictive).
-        let resolved = router.resolve_with_channel_id(&ChannelType::Discord, "any-user", None, None);
+        let resolved =
+            router.resolve_with_channel_id(&ChannelType::Discord, "any-user", None, None);
         assert_eq!(resolved, None);
     }
 
