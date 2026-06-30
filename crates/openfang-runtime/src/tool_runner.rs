@@ -4367,6 +4367,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -4429,6 +4430,7 @@ mod tests {
             None,                 // tts_engine
             None,                 // docker_config
             None,                 // process_manager
+            None,                 // sender_id
         )
         .await;
         assert!(

@@ -1,5 +1,7 @@
 # Build
 /target
+/target-clippy
+/target-*
 **/*.rs.bk
 *.pdb
 
