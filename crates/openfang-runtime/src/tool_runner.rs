@@ -230,6 +230,23 @@ pub async fn execute_tool(
                 tool_web_fetch_legacy(input).await
             }
         }
+        // Secure fetch — secret header values are resolved from allowlisted
+        // env vars in Rust, so the LLM never sees the raw secret.
+        "secure_fetch" => {
+            let url = input["url"].as_str().unwrap_or("");
+            // Taint check: block URLs containing secrets/PII from being exfiltrated.
+            if let Some(violation) = check_taint_net_fetch(url) {
+                return ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Taint violation: {violation}"),
+                    is_error: true,
+                };
+            }
+            match web_ctx {
+                Some(ctx) => tool_secure_fetch(input, &ctx.fetch).await,
+                None => Err("secure_fetch unavailable: web tools are not configured".to_string()),
+            }
+        }
         "web_search" => {
             if let Some(ctx) = web_ctx {
                 let query = input["query"].as_str().unwrap_or("");
@@ -623,6 +640,21 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "method": { "type": "string", "enum": ["GET","POST","PUT","PATCH","DELETE"], "description": "HTTP method (default: GET)" },
                     "headers": { "type": "object", "description": "Custom HTTP headers as key-value pairs" },
                     "body": { "type": "string", "description": "Request body for POST/PUT/PATCH" }
+                },
+                "required": ["url"]
+            }),
+        },
+        ToolDefinition {
+            name: "secure_fetch".to_string(),
+            description: "HTTP request where secret header values are read from allowlisted env vars by name; never pass raw secrets.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "The URL to fetch (http/https only)" },
+                    "method": { "type": "string", "enum": ["GET","POST","PUT","PATCH","DELETE"], "description": "HTTP method (default: GET)" },
+                    "headers": { "type": "object", "description": "Plain, non-secret HTTP headers as key-value pairs" },
+                    "body": { "type": "string", "description": "Request body for POST/PUT/PATCH" },
+                    "secret_headers": { "type": "object", "description": "Map of header name -> ENV-VAR NAME. The value is the name of an allowlisted environment variable; its secret value is resolved server-side and never seen by the model. Pass the env-var name, NOT the secret." }
                 },
                 "required": ["url"]
             }),
@@ -1446,6 +1478,97 @@ async fn tool_web_fetch_legacy(input: &serde_json::Value) -> Result<String, Stri
         body
     };
     Ok(format!("HTTP {status}\n\n{truncated}"))
+}
+
+/// Resolve `secret_headers` (a `{header_name: ENV_VAR_NAME}` map) into concrete
+/// `(header_name, secret_value)` pairs, enforcing the allowlist (Guard A) and
+/// per-secret host-binding (Guard B) guards.
+///
+/// SECURITY: every error message references only the env-var NAME — never the
+/// resolved secret value — and the function never logs.
+fn resolve_secret_headers(
+    secret_headers: &serde_json::Map<String, serde_json::Value>,
+    request_host: &str,
+    config: &openfang_types::config::SecureFetchConfig,
+) -> Result<Vec<(String, String)>, String> {
+    let mut resolved = Vec::with_capacity(secret_headers.len());
+    for (header_name, env_value) in secret_headers {
+        // The value must be the NAME of an env var, not the secret itself.
+        let env_name = env_value.as_str().ok_or_else(|| {
+            format!("secret header '{header_name}' must map to an env-var NAME (a string)")
+        })?;
+
+        // Guard A (allowlist): fail-closed — only env vars in allowed_secrets
+        // may ever be read. Do not touch the environment otherwise.
+        if !config.allowed_secrets.iter().any(|s| s == env_name) {
+            return Err(format!(
+                "secret '{env_name}' not allowlisted for secure_fetch"
+            ));
+        }
+
+        // Guard B (host binding): if this secret is bound to specific hosts,
+        // refuse to attach it to a request aimed anywhere else.
+        if let Some(hosts) = config.secret_hosts.get(env_name) {
+            if !hosts.iter().any(|h| h.to_lowercase() == request_host) {
+                return Err(format!(
+                    "secret '{env_name}' not permitted for host {request_host}"
+                ));
+            }
+        }
+
+        // Resolve the value from the environment. The value is never logged.
+        let secret = std::env::var(env_name)
+            .map_err(|_| format!("secret '{env_name}' is not set in the environment"))?;
+        resolved.push((header_name.clone(), secret));
+    }
+    Ok(resolved)
+}
+
+/// `secure_fetch` — like `web_fetch`, but secret header values are referenced by
+/// ENV-VAR NAME and resolved in Rust so the LLM never sees the secret.
+///
+/// Guard A (allowlist) and Guard B (host binding) are applied in
+/// [`resolve_secret_headers`]; Guard C (SSRF) runs here before any network I/O
+/// (and again inside the shared fetch engine). With no `secret_headers`, this
+/// behaves like a plain `web_fetch`.
+async fn tool_secure_fetch(
+    input: &serde_json::Value,
+    engine: &crate::web_fetch::WebFetchEngine,
+) -> Result<String, String> {
+    let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
+    let method = input["method"].as_str().unwrap_or("GET");
+    let body = input["body"].as_str();
+
+    // Guard C (SSRF): block private/metadata hosts before any I/O or env reads.
+    crate::web_fetch::check_ssrf(url, engine.ssrf_allowed_hosts())?;
+    let request_host = crate::web_fetch::url_hostname(url);
+
+    // Start from the plain, non-secret headers supplied by the model.
+    let mut headers: serde_json::Map<String, serde_json::Value> = input
+        .get("headers")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+
+    // Resolve secret headers from allowlisted env vars (Guards A + B).
+    if let Some(secret_headers) = input.get("secret_headers").and_then(|v| v.as_object()) {
+        if !secret_headers.is_empty() {
+            let resolved = resolve_secret_headers(
+                secret_headers,
+                &request_host,
+                engine.secure_fetch_config(),
+            )?;
+            for (name, value) in resolved {
+                headers.insert(name, serde_json::Value::String(value));
+            }
+        }
+    }
+
+    // Reuse the web_fetch engine: identical method/header/body handling,
+    // content-type auto-detection, raw-body return, and SSRF re-check.
+    engine
+        .fetch_with_options(url, method, Some(&headers), body)
+        .await
 }
 
 /// Legacy web search via DuckDuckGo HTML only. Used when WebToolsContext is unavailable.
@@ -2284,7 +2407,8 @@ async fn tool_cron_create(
     // Normalize system_event to agent_turn so cron delivery works via Telegram.
     // system_event only publishes to the internal event bus, not to channels.
     if job["action"]["kind"].as_str() == Some("system_event") {
-        let text = job["action"]["text"].as_str()
+        let text = job["action"]["text"]
+            .as_str()
             .or_else(|| job["action"]["message"].as_str())
             .or_else(|| job["action"]["description"].as_str())
             .unwrap_or("Reminder")
@@ -2308,7 +2432,10 @@ async fn tool_cron_create(
         let delivery = &job["delivery"];
         let needs_replacement = delivery.is_null()
             || !delivery.is_object()
-            || matches!(delivery["kind"].as_str(), Some("last_channel") | Some("none") | None);
+            || matches!(
+                delivery["kind"].as_str(),
+                Some("last_channel") | Some("none") | None
+            );
         if needs_replacement {
             job["delivery"] = serde_json::json!({
                 "kind": "channel",
@@ -2374,8 +2501,8 @@ async fn tool_channel_send(
             Some(id) => id,
             None => {
                 // Fallback: check agent's delivery.last_channel context
-                let last_channel = caller_agent_id
-                    .and_then(|aid| kh.get_delivery_context(aid, &channel));
+                let last_channel =
+                    caller_agent_id.and_then(|aid| kh.get_delivery_context(aid, &channel));
                 match last_channel {
                     Some(id) => id,
                     None => {
@@ -2891,14 +3018,12 @@ async fn tool_ollama_structured(input: &serde_json::Value) -> Result<String, Str
     let prompt = input["prompt"]
         .as_str()
         .ok_or("Missing 'prompt' parameter")?;
-    let schema = input
-        .get("schema")
-        .ok_or("Missing 'schema' parameter")?;
+    let schema = input.get("schema").ok_or("Missing 'schema' parameter")?;
     let system = input["system"].as_str().unwrap_or("");
     let model = input["model"].as_str().unwrap_or("gpt-oss:20b");
 
-    let ollama_url = std::env::var("OLLAMA_HOST")
-        .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+    let ollama_url =
+        std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
     let url = format!("{}/api/chat", ollama_url.trim_end_matches('/'));
 
     let mut messages = Vec::new();
@@ -3600,6 +3725,107 @@ mod tests {
         assert!(names.contains(&"docker_exec"));
         // Canvas tool
         assert!(names.contains(&"canvas_present"));
+        // secure_fetch (env-resolved, allowlisted secret headers)
+        assert!(names.contains(&"secure_fetch"));
+    }
+
+    // ── secure_fetch tests ───────────────────────────────────────────────
+
+    /// Build a SecureFetchConfig for tests.
+    fn secure_cfg(
+        allowed: &[&str],
+        hosts: &[(&str, &[&str])],
+    ) -> openfang_types::config::SecureFetchConfig {
+        let mut secret_hosts = std::collections::HashMap::new();
+        for (env, list) in hosts {
+            secret_hosts.insert(
+                env.to_string(),
+                list.iter().map(|h| h.to_string()).collect(),
+            );
+        }
+        openfang_types::config::SecureFetchConfig {
+            allowed_secrets: allowed.iter().map(|s| s.to_string()).collect(),
+            secret_hosts,
+        }
+    }
+
+    fn secret_map(pairs: &[(&str, &str)]) -> serde_json::Map<String, serde_json::Value> {
+        pairs
+            .iter()
+            .map(|(h, e)| (h.to_string(), serde_json::Value::String(e.to_string())))
+            .collect()
+    }
+
+    #[test]
+    fn test_secure_fetch_in_catalog() {
+        let tools = builtin_tool_definitions();
+        let tool = tools
+            .iter()
+            .find(|t| t.name == "secure_fetch")
+            .expect("secure_fetch must be advertised in the catalog");
+        let props = &tool.input_schema["properties"];
+        assert!(props.get("url").is_some());
+        assert!(props.get("secret_headers").is_some());
+        assert_eq!(tool.input_schema["required"][0], "url");
+    }
+
+    #[test]
+    fn test_secure_fetch_rejects_non_allowlisted_secret() {
+        // allowed_secrets is empty for "EVIL_SECRET" → fail-closed.
+        let cfg = secure_cfg(&["GITHUB_TOKEN"], &[]);
+        let headers = secret_map(&[("Authorization", "OPENAI_API_KEY")]);
+        let err = resolve_secret_headers(&headers, "api.example.com", &cfg)
+            .expect_err("non-allowlisted secret must be rejected");
+        assert_eq!(
+            err,
+            "secret 'OPENAI_API_KEY' not allowlisted for secure_fetch"
+        );
+    }
+
+    #[test]
+    fn test_secure_fetch_fail_closed_empty_allowlist() {
+        // Default (empty) config rejects ANY secret_headers use.
+        let cfg = openfang_types::config::SecureFetchConfig::default();
+        let headers = secret_map(&[("X-Api-Key", "ANY_SECRET")]);
+        assert!(resolve_secret_headers(&headers, "api.example.com", &cfg).is_err());
+    }
+
+    #[test]
+    fn test_secure_fetch_host_binding_rejects_wrong_host() {
+        // STRIPE_KEY is bound to api.stripe.com; sending to evil.com must fail.
+        let cfg = secure_cfg(&["STRIPE_KEY"], &[("STRIPE_KEY", &["api.stripe.com"])]);
+        let headers = secret_map(&[("Authorization", "STRIPE_KEY")]);
+        let err = resolve_secret_headers(&headers, "evil.com", &cfg)
+            .expect_err("host-bound secret must be rejected for a wrong host");
+        assert_eq!(err, "secret 'STRIPE_KEY' not permitted for host evil.com");
+    }
+
+    #[test]
+    fn test_secure_fetch_happy_path_resolves_secret() {
+        // Allowlist + host binding satisfied + env var set → secret resolves
+        // and is injected as the header value (LLM never supplied it).
+        let env_name = "OPENFANG_TEST_SECURE_FETCH_KEY";
+        std::env::set_var(env_name, "s3cr3t-value");
+        let cfg = secure_cfg(&[env_name], &[(env_name, &["api.example.com"])]);
+        let headers = secret_map(&[("Authorization", env_name)]);
+        let resolved = resolve_secret_headers(&headers, "api.example.com", &cfg)
+            .expect("happy path must resolve");
+        std::env::remove_var(env_name);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].0, "Authorization");
+        assert_eq!(resolved[0].1, "s3cr3t-value");
+    }
+
+    #[test]
+    fn test_secure_fetch_missing_env_var_errors_by_name() {
+        // Allowlisted but unset → error references the NAME only, no secret.
+        let env_name = "OPENFANG_TEST_SECURE_FETCH_UNSET";
+        std::env::remove_var(env_name);
+        let cfg = secure_cfg(&[env_name], &[]);
+        let headers = secret_map(&[("X-Token", env_name)]);
+        let err = resolve_secret_headers(&headers, "api.example.com", &cfg)
+            .expect_err("unset env var must error");
+        assert!(err.contains(env_name));
     }
 
     #[test]

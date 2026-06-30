@@ -346,6 +346,9 @@ pub struct WebFetchConfig {
     /// cloud metadata endpoint blocking (169.254.169.254, metadata.google.internal, etc.).
     #[serde(default)]
     pub ssrf_allowed_hosts: Vec<String>,
+    /// Configuration for the `secure_fetch` tool (env-resolved secret headers).
+    #[serde(default)]
+    pub secure_fetch: SecureFetchConfig,
 }
 
 impl Default for WebFetchConfig {
@@ -356,8 +359,30 @@ impl Default for WebFetchConfig {
             timeout_secs: 30,
             readability: true,
             ssrf_allowed_hosts: Vec::new(),
+            secure_fetch: SecureFetchConfig::default(),
         }
     }
+}
+
+/// Configuration for the `secure_fetch` built-in tool.
+///
+/// `secure_fetch` lets an agent attach secret HTTP headers whose values are
+/// read from environment variables **by name** in Rust, so the LLM never sees
+/// the secret. This config is the allowlist that keeps an agent from reading
+/// arbitrary env vars (e.g. exfiltrating `OPENAI_API_KEY`).
+///
+/// Fail-closed: with an empty `allowed_secrets` (the default), any attempt to
+/// use `secret_headers` is rejected.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecureFetchConfig {
+    /// Env-var names this tool is permitted to read. Empty = fail-closed:
+    /// every `secret_headers` use is rejected.
+    pub allowed_secrets: Vec<String>,
+    /// Optional host binding: env-var name -> the only host(s) its value may be
+    /// sent to. When an env var is absent from this map, no host restriction is
+    /// applied beyond the allowlist and the SSRF check. Empty map = no bindings.
+    pub secret_hosts: HashMap<String, Vec<String>>,
 }
 
 /// Browser automation configuration.
