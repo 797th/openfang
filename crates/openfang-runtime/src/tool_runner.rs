@@ -3881,6 +3881,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(
@@ -3910,6 +3911,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -3936,6 +3938,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -3962,6 +3965,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -3988,6 +3992,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         // web_search now attempts a real fetch; may succeed or fail depending on network
@@ -4014,6 +4019,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -4040,6 +4046,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -4067,6 +4074,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -4098,6 +4106,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         // Should fail for file-not-found, NOT for permission denied
@@ -4143,6 +4152,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         // Should NOT be the capability-enforcement "Permission denied" — it should
@@ -4178,6 +4188,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -4347,6 +4358,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
@@ -4392,6 +4404,7 @@ mod tests {
             None, // tts_engine
             None, // docker_config
             None, // process_manager
+            None, // sender_id
         )
         .await;
         assert!(result.is_error);
