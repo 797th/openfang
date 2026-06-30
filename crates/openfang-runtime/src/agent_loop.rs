@@ -3550,6 +3550,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // sender_id
         )
         .await
         .expect("Loop should complete without error");
@@ -3603,6 +3604,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // sender_id
         )
         .await
         .expect("Loop should complete without error");
@@ -3658,6 +3660,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // sender_id
         )
         .await
         .expect("Loop should complete without error");
@@ -3711,6 +3714,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // sender_id
         )
         .await
         .expect("Loop should complete without error");
@@ -3757,6 +3761,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // sender_id
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -3881,6 +3886,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // sender_id
         )
         .await
         .expect("Loop should recover via retry");
@@ -3928,6 +3934,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // sender_id
         )
         .await
         .expect("Loop should complete with fallback");
@@ -3983,6 +3990,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // sender_id
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -4959,6 +4967,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // sender_id
         )
         .await
         .expect("Agent loop should complete");
@@ -5029,6 +5038,7 @@ mod tests {
             None,
             None,
             None,
+            None, // sender_id
         )
         .await
         .expect("Agent loop should recover nested XML tool calls");
@@ -5101,6 +5111,7 @@ mod tests {
             None,
             None,
             None, // user_content_blocks
+            None, // sender_id
         )
         .await
         .expect("Normal loop should complete");
@@ -5164,6 +5175,7 @@ mod tests {
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
+            None, // sender_id
         )
         .await
         .expect("Streaming loop should complete");
