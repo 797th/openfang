@@ -5,7 +5,7 @@ usage_footer = "off"
 [channels.telegram]
 allowed_users = []
 bot_token_env = "TELEGRAM_BOT_TOKEN"
-default_agent = "nideesh-agent"
+default_agent = "openfang-company"
 poll_interval_secs = 1
 
 [default_model]
