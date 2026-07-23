@@ -33,7 +33,13 @@ const MAX_TURN_MESSAGE_LEN: usize = 16_384;
 const MIN_TIMEOUT_SECS: u64 = 10;
 
 /// Maximum timeout for AgentTurn (seconds).
-const MAX_TIMEOUT_SECS: u64 = 600;
+///
+/// Research/collection Hands fan out over many sources (dozens of
+/// `web_search` + `web_fetch` calls) before they synthesise and write their
+/// report, so a scheduled sweep routinely runs well past ten minutes. The
+/// ceiling is one hour so those jobs can finish; short jobs are unaffected
+/// because the effective timeout is per-job and still defaults to 120s.
+const MAX_TIMEOUT_SECS: u64 = 3600;
 
 /// Maximum webhook URL length.
 const MAX_WEBHOOK_URL_LEN: usize = 2048;
@@ -119,7 +125,7 @@ pub enum CronAction {
         message: String,
         /// Optional model override for this turn.
         model_override: Option<String>,
-        /// Timeout in seconds (10..=600).
+        /// Timeout in seconds (10..=3600, default: 120).
         timeout_secs: Option<u64>,
     },
     /// Run a workflow by ID or name.
@@ -744,7 +750,7 @@ mod tests {
         job.action = CronAction::AgentTurn {
             message: "hello".into(),
             model_override: None,
-            timeout_secs: Some(601),
+            timeout_secs: Some(3601),
         };
         let err = job.validate(0).unwrap_err();
         assert!(err.contains("too large"), "{err}");
@@ -764,6 +770,14 @@ mod tests {
             message: "hello".into(),
             model_override: None,
             timeout_secs: Some(600),
+        };
+        assert!(job.validate(0).is_ok());
+
+        // Upper bound: long-running research/collection sweeps need the full hour.
+        job.action = CronAction::AgentTurn {
+            message: "hello".into(),
+            model_override: None,
+            timeout_secs: Some(MAX_TIMEOUT_SECS),
         };
         assert!(job.validate(0).is_ok());
     }

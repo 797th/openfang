@@ -9257,6 +9257,12 @@ pub async fn create_schedule(
         message.clone()
     };
 
+    // Per-job execution timeout. Omitted => null => the kernel's 120s default,
+    // which is far too short for research/collection agents that fan out over
+    // many sources before producing output. Bounds are enforced by
+    // `CronJob::validate` (MIN_TIMEOUT_SECS..=MAX_TIMEOUT_SECS).
+    let timeout_secs = req.get("timeout_secs").and_then(|v| v.as_u64());
+
     // Accept multi-destination delivery targets. Validate each entry matches
     // the `CronDeliveryTarget` shape up front so we return a 400 rather than
     // silently dropping targets or failing later in the kernel.
@@ -9294,7 +9300,7 @@ pub async fn create_schedule(
             "kind": "agent_turn",
             "message": job_message,
             "model_override": null,
-            "timeout_secs": null,
+            "timeout_secs": timeout_secs,
         },
         "delivery": { "kind": "none" },
         "one_shot": false,
