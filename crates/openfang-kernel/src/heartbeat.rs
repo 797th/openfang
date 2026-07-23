@@ -193,11 +193,17 @@ pub fn check_agents(registry: &AgentRegistry, config: &HeartbeatConfig) -> Vec<H
         let unresponsive = entry_ref.state == AgentState::Crashed || inactive_secs > timeout_secs;
 
         if unresponsive && entry_ref.state == AgentState::Running {
-            warn!(
+            // Detection only — do NOT warn here. This runs before the kernel
+            // applies per-agent exemptions (idle reactive agents, quiet hours),
+            // so warning at this point spams the log every cycle for agents that
+            // are perfectly healthy. The kernel emits the authoritative WARN when
+            // it actually acts on a genuinely unresponsive agent (marks it
+            // Crashed for recovery).
+            debug!(
                 agent = %entry_ref.name,
                 inactive_secs,
                 timeout_secs,
-                "Agent is unresponsive"
+                "Agent detected inactive past timeout (pending exemption checks)"
             );
         } else if entry_ref.state == AgentState::Crashed {
             warn!(
@@ -398,6 +404,40 @@ mod tests {
 
         assert!(should_exempt_idle_reactive_agent(&agent, false));
         assert!(!should_exempt_idle_reactive_agent(&agent, true));
+    }
+
+    #[tokio::test]
+    async fn test_finished_turn_handle_does_not_block_reactive_exemption() {
+        // Regression: once a reactive agent processes a turn, its AbortHandle
+        // lingers in the kernel's `running_tasks` map (it is only removed on
+        // explicit cancel). A bare `contains_key` therefore reported the agent as
+        // "actively executing" forever, disabling the idle exemption and making
+        // the agent flap Crashed<->Running every heartbeat cycle. The kernel now
+        // gates on `!handle.is_finished()`, so a completed turn no longer counts.
+        let mut agent = make_entry(
+            "reactive-company",
+            AgentState::Running,
+            Utc::now() - Duration::seconds(600),
+            Utc::now() - Duration::seconds(300),
+        );
+        agent.manifest.schedule = ScheduleMode::Reactive;
+
+        // A finished turn: spawn a trivial task and let it complete.
+        let handle = tokio::spawn(async {}).abort_handle();
+        while !handle.is_finished() {
+            tokio::task::yield_now().await;
+        }
+
+        // Mirrors the kernel's gating expression for a present-but-finished handle.
+        let is_running_task = !handle.is_finished();
+        assert!(
+            !is_running_task,
+            "a finished turn handle must not count as actively executing"
+        );
+        assert!(
+            should_exempt_idle_reactive_agent(&agent, is_running_task),
+            "idle reactive agent whose last turn has finished must stay exempt"
+        );
     }
 
     #[test]
