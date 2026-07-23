@@ -6641,7 +6641,7 @@ impl OpenFangKernel {
                 }
 
                 // For other delivery types, go through the LLM.
-                let timeout_s = timeout_secs.unwrap_or(120);
+                let timeout_s = timeout_secs.unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_SECS);
                 let timeout = std::time::Duration::from_secs(timeout_s);
                 let delivery = job.delivery.clone();
                 let delivery_targets = job.delivery_targets.clone();
@@ -6703,7 +6703,7 @@ impl OpenFangKernel {
                 timeout_secs,
             } => {
                 let wf_input = input.clone().unwrap_or_default();
-                let timeout_s = timeout_secs.unwrap_or(120);
+                let timeout_s = timeout_secs.unwrap_or(DEFAULT_AGENT_TURN_TIMEOUT_SECS);
                 let timeout = std::time::Duration::from_secs(timeout_s);
                 let delivery = job.delivery.clone();
                 let delivery_targets = job.delivery_targets.clone();
@@ -7152,6 +7152,16 @@ impl openfang_channels::bridge::ChannelBridgeHandle for KernelCronBridge {
             .map(|_| ())
     }
 }
+
+/// Default execution timeout for a scheduled `AgentTurn`, in seconds.
+///
+/// The previous default of 120s was shorter than almost any agent turn that
+/// calls tools: a research or collection sweep issues dozens of `web_search`
+/// and `web_fetch` calls before it writes its report, so it was killed
+/// mid-run and delivered nothing. Ten minutes covers realistic sweeps while
+/// still bounding a runaway job. Per-job overrides go up to
+/// `MAX_TIMEOUT_SECS` (1 hour).
+const DEFAULT_AGENT_TURN_TIMEOUT_SECS: u64 = 600;
 
 /// Fan out `output` to every target in `delivery_targets` concurrently.
 ///

@@ -866,7 +866,8 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "properties": {
                     "description": { "type": "string", "description": "What this schedule does (e.g., 'Check for new emails')" },
                     "schedule": { "type": "string", "description": "Natural language or cron expression (e.g., 'every 5 minutes', 'daily at 9am', '0 */5 * * *')" },
-                    "agent": { "type": "string", "description": "Agent name or ID to run this task (optional, defaults to self)" }
+                    "agent": { "type": "string", "description": "Agent name or ID to run this task (optional, defaults to self)" },
+                    "timeout_secs": { "type": "integer", "description": "Max seconds the scheduled run may take (10-3600, default 600). Raise it for long jobs like multi-source research or collection sweeps, which routinely take many minutes — the run is killed at this limit and delivers nothing." }
                 },
                 "required": ["description", "schedule"]
             }),
@@ -2474,6 +2475,10 @@ async fn tool_schedule_create(
         .as_str()
         .ok_or("Missing 'schedule' parameter")?;
     let agent_input = input["agent"].as_str().unwrap_or("");
+    // Optional per-job timeout. Omitted => null => the kernel default. Agents
+    // that know their sweep is long-running (research/collection) can raise it
+    // up to MAX_TIMEOUT_SECS; the value is validated by `CronJob::validate`.
+    let timeout_secs = input.get("timeout_secs").and_then(|v| v.as_u64());
 
     let cron_expr = parse_schedule_to_cron(schedule_str)?;
     let target_agent_id = resolve_schedule_target(kh, agent_input, caller_agent_id)?;
@@ -2486,7 +2491,7 @@ async fn tool_schedule_create(
             "kind": "agent_turn",
             "message": description,
             "model_override": null,
-            "timeout_secs": null,
+            "timeout_secs": timeout_secs,
         },
         "delivery": { "kind": "none" },
         "one_shot": false,
