@@ -1,6 +1,6 @@
 # openfang — https://openfang.797th.com
 #
-# Self-contained: namespace, regcred, deployment, service, routing.
+# Self-contained: namespace, regcred, config, storage, deployment, service, routing.
 # Substitute placeholders at deploy time (envsubst or the deploy UI):
 #
 #   ${DOMAIN}              e.g. 797th
@@ -11,7 +11,7 @@
 #   ${OLLAMA_API_KEY}
 #   ${TELEGRAM_BOT_TOKEN}
 #   ${SCREENBUDDY_API_KEY} desktop to backend service key (x-api-key)
-#   ${OPENFANG_API_KEY}    dashboard/API key
+#   ${OPENFANG_API_KEY}    dashboard/API key (also written into config.toml)
 #   ${OPENFANG_WEBHOOK_TOKEN}
 #
 # NOTE: OPENFANG_WEBHOOK_TOKEN must currently equal OPENFANG_API_KEY, and the
@@ -19,13 +19,18 @@
 # authenticates the callback at both layers. Rotate all three together.
 #
 # secret/797th-com-tls (TLS for *.797th.com) is expected to already exist.
-# configmap/openfang-config must be created from config.template.toml before
-# this applies; the pod will not boot without /data/config.toml.
 #
 # Routing: the /hooks/ route is priority 100 and carries no oauth2-proxy
 # middleware, so ScreenBuddy callbacks reach the pod with the Authorization
 # header intact. forwardAuth would redirect them to SSO and break them.
 # Everything else is priority 10 behind auth.797th.com. Do not reorder.
+#
+# Do not let any line in this file get truncated: a clipped line in the
+# config.toml block below still applies cleanly as YAML, but produces invalid
+# TOML. The daemon then logs a WARN, falls back to built-in defaults, and binds
+# 127.0.0.1:50051 instead of 0.0.0.0:4200 — reachable by nothing, with no LLM
+# provider configured. The probes below are what turn that into a visible
+# failure instead of a green pod serving nothing.
 ---
 apiVersion: v1
 kind: Namespace
@@ -42,6 +47,71 @@ data:
   .dockerconfigjson: ${DOCKER_CONFIG_JSON}
 ---
 apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openfang-config
+  namespace: openfang
+data:
+  config.toml: |
+    api_key = "${OPENFANG_API_KEY}"
+    api_listen = "0.0.0.0:4200"
+    usage_footer = "off"
+
+    [channels.telegram]
+    allowed_users = []
+    bot_token_env = "TELEGRAM_BOT_TOKEN"
+    default_agent = "openfang-company"
+    poll_interval_secs = 1
+
+    [default_model]
+    api_key_env = "NVIDIA_API_KEY"
+    base_url = "https://integrate.api.nvidia.com/v1"
+    model = "stepfun-ai/step-3.5-flash"
+    provider = "nvidia"
+
+    [memory]
+    decay_rate = 0.05
+    embedding_model = "nomic-embed-text:latest"
+    embedding_provider = "ollama"
+
+    [provider_urls]
+    nvidia = "https://integrate.api.nvidia.com/v1"
+    ollama = "http://ollama-external.ollama.svc.cluster.local:11434/v1"
+
+    [web]
+    cache_ttl_minutes = 15
+    search_provider = "auto"
+
+    # Self-hosted SearXNG (see 797th/SEARXNG). With `auto`, SearXNG is tried
+    # first and DuckDuckGo remains the fallback. Reached in-cluster over the
+    # searxng namespace's ClusterIP DNS (Service port 80).
+    [web.searxng]
+    url = "http://searxng.searxng.svc.cluster.local"
+
+    [web.fetch]
+    ssrf_allowed_hosts = ["127.0.0.1", "localhost", "192.168.0.0/16", "ai-screen-buddy-backend.pageapp.net"]
+
+    # secure_fetch: lets an agent attach secret HTTP headers whose values are read
+    # from environment variables BY NAME in Rust — the LLM never sees the secret.
+    # Fail-closed: an env var must be listed in allowed_secrets to be usable.
+    # secret_hosts pins each secret so its value is only ever sent to those hosts.
+    [web.fetch.secure_fetch]
+    allowed_secrets = ["SCREENBUDDY_API_KEY"]
+
+    [web.fetch.secure_fetch.secret_hosts]
+    SCREENBUDDY_API_KEY = ["ai-screen-buddy-backend.pageapp.net"]
+
+    # webhook_triggers: enables POST /hooks/agent (and /hooks/wake) so an external
+    # service (ScreenBuddy) can wake an agent on job completion. Bearer token is
+    # read from the env var named by token_env, set inline on the Deployment
+    # below (this manifest has no openfang-secrets — that is the rancher variant).
+    [webhook_triggers]
+    enabled = true
+    token_env = "OPENFANG_WEBHOOK_TOKEN"
+    max_payload_bytes = 65536
+    rate_limit_per_minute = 30
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: openfang-data
@@ -51,7 +121,7 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 10Gi
+      storage: 1Gi
   storageClassName: longhorn
   volumeMode: Filesystem
 ---
@@ -74,6 +144,11 @@ spec:
       labels:
         app: openfang
     spec:
+      # Image runs as uid 1000 (non-root). fsGroup makes the data volume
+      # group-writable so the entrypoint can seed agents/config on first boot.
+      securityContext:
+        runAsUser: 1000
+        fsGroup: 1000
       containers:
         - name: openfang
           # Harbor by HOSTNAME, not IP (the SHARED_CICD pull-failure fix).
@@ -124,6 +199,22 @@ spec:
             - name: config
               mountPath: /data/config.toml
               subPath: config.toml
+          # /api/health is public (no api_key required), so kubelet can probe it.
+          # These assert the daemon is listening on 4200 specifically — which is
+          # exactly what a config that silently fell back to defaults would not be.
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 4200
+            # First boot seeds agents + config from disk before the API is up.
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 4200
+            initialDelaySeconds: 60
+            periodSeconds: 30
       imagePullSecrets:
         - name: regcred${DOMAIN}
       volumes:

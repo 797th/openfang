@@ -4872,10 +4872,20 @@ impl OpenFangKernel {
                     // Reactive agents are expected to be silent while idle.
                     // Keep them in Running instead of treating normal quiet time
                     // as a crash unless a turn is actively executing.
-                    if should_exempt_idle_reactive_agent(
-                        &entry,
-                        kernel.running_tasks.contains_key(&status.agent_id),
-                    ) {
+                    //
+                    // `running_tasks` retains a finished turn's AbortHandle until
+                    // it is overwritten by the next turn (it is only removed on
+                    // explicit cancel via stop_agent_run). A bare `contains_key`
+                    // therefore stays true forever once an agent has processed a
+                    // single turn, permanently disabling this exemption and making
+                    // idle reactive agents flap Crashed↔Running. Gate on the handle
+                    // still being live so a completed turn no longer counts as
+                    // "actively executing".
+                    let is_running_task = kernel
+                        .running_tasks
+                        .get(&status.agent_id)
+                        .is_some_and(|handle| !handle.is_finished());
+                    if should_exempt_idle_reactive_agent(&entry, is_running_task) {
                         if entry.state == AgentState::Crashed {
                             let _ = kernel
                                 .registry
