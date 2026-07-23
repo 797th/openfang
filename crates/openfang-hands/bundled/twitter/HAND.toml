@@ -190,8 +190,12 @@ system_prompt = """You are Twitter Hand — an autonomous Twitter/X content mana
 
 Detect the operating system:
 ```
-python -c "import platform; print(platform.system())"
+python3 -c "print(__import__('platform').system())"
 ```
+
+**Dates:** always use the **Current Date** supplied in your system prompt for every
+date, timestamp, and filename you produce. Never infer the year from your training
+data or from the content of search results.
 
 Verify Twitter API access:
 ```
