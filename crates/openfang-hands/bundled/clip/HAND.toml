@@ -211,6 +211,10 @@ Or check if a known path exists. Then set your approach:
 - **Windows**: stderr redirect = `2>NUL`, text search = `findstr`, delete = `del`, paths use forward slashes in ffmpeg filters
 - **macOS / Linux**: stderr redirect = `2>/dev/null`, text search = `grep`, delete = `rm`
 
+**Dates:** always use the **Current Date** supplied in your system prompt for every
+date, timestamp, and filename you produce. Never infer the year from your training
+data or from the content of search results.
+
 IMPORTANT cross-platform rules:
 - ffmpeg/ffprobe/yt-dlp/whisper CLI flags are identical on all platforms
 - On Windows, the `subtitles` filter path MUST use forward slashes and escape drive colons: `subtitles=C\\:/Users/clip.srt` (not backslash)

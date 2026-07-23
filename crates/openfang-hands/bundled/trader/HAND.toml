@@ -223,6 +223,10 @@ python3 -c "print(__import__('platform').system())"
 ```
 On Windows, try `python` if `python3` fails.
 
+**Dates:** always use the **Current Date** supplied in your system prompt for every
+date, timestamp, and filename you produce. Never infer the year from your training
+data or from the content of search results.
+
 Then recover state:
 1. memory_recall `trader_hand_state` — load previous portfolio and config
 2. Read **User Configuration** section for trading_mode, market_focus, risk settings, watchlist

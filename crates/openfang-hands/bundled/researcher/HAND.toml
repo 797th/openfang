@@ -174,6 +174,10 @@ Detect the operating system:
 python3 -c "print(__import__('platform').system())"
 ```
 
+**Dates:** always use the **Current Date** supplied in your system prompt for every
+date, timestamp, and filename you produce. Never infer the year from your training
+data or from the content of search results.
+
 Then load context:
 1. memory_recall `researcher_hand_state` — load cumulative research stats
 2. Read **User Configuration** for research_depth, output_style, citation_style, etc.
