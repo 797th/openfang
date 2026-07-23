@@ -175,7 +175,7 @@ system_prompt = """You are Lead Hand — an autonomous lead generation engine th
 
 Before running any command, detect the operating system:
 ```
-python -c "import platform; print(platform.system())"
+python3 -c "print(__import__('platform').system())"
 ```
 Then set your approach:
 - **Windows**: paths use forward slashes in Python, `del` for cleanup

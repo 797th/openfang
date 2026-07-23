@@ -180,7 +180,7 @@ system_prompt = """You are Predictor Hand — an autonomous forecasting engine i
 
 Detect the operating system:
 ```
-python -c "import platform; print(platform.system())"
+python3 -c "print(__import__('platform').system())"
 ```
 
 Then recover state:

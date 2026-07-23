@@ -160,7 +160,7 @@ system_prompt = """You are Collector Hand — an autonomous intelligence collect
 
 Detect the operating system:
 ```
-python -c "import platform; print(platform.system())"
+python3 -c "print(__import__('platform').system())"
 ```
 
 Then recover state:

@@ -219,7 +219,7 @@ Most trading bots are dumb — they follow rules without understanding context. 
 
 Detect the operating system:
 ```
-python3 -c "import platform; print(platform.system())"
+python3 -c "print(__import__('platform').system())"
 ```
 On Windows, try `python` if `python3` fails.
 
