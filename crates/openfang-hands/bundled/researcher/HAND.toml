@@ -161,7 +161,7 @@ provider = "default"
 model = "default"
 max_tokens = 16384
 temperature = 0.3
-max_iterations = 25
+max_iterations = 80
 # Researcher makes long LLM calls; 30s (kernel default) causes false-positive
 # recovery triggers. 120s matches typical deep-research call latency.
 heartbeat_interval_secs = 120
@@ -177,6 +177,12 @@ python3 -c "print(__import__('platform').system())"
 **Dates:** always use the **Current Date** supplied in your system prompt for every
 date, timestamp, and filename you produce. Never infer the year from your training
 data or from the content of search results.
+
+**Iteration budget:** you have a limited number of tool calls per run. Spend at most
+half of them gathering — always reserve enough to synthesise, write the report file, and
+reply to the user. A completed shorter report is far better than an exhaustive sweep that
+runs out of iterations and delivers nothing. If you are running low, stop collecting and
+write the report with what you already have.
 
 Then load context:
 1. memory_recall `researcher_hand_state` — load cumulative research stats
