@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 8;
+const SCHEMA_VERSION: u32 = 9;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -41,6 +41,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 8 {
         migrate_v8(conn)?;
+    }
+
+    if current_version < 9 {
+        migrate_v9(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -323,6 +327,27 @@ fn migrate_v8(conn: &Connection) -> Result<(), rusqlite::Error> {
 
         INSERT OR IGNORE INTO migrations (version, applied_at, description)
         VALUES (8, datetime('now'), 'Add audit_entries table for persistent Merkle audit trail');
+        ",
+    )?;
+    Ok(())
+}
+
+/// Version 9: flatten `entity_type` / `relation_type` from the legacy
+/// serde-JSON encoding (`"organization"`, `{"custom":"product"}`) to plain
+/// strings (`organization`, `product`) so the columns are cleanly groupable,
+/// filterable, and importable into a graph DB. Uses SQLite JSON1 to unwrap
+/// both legacy shapes; object-form rows are handled first so quoted-scalar
+/// rows aren't double-processed. One-shot, gated by user_version.
+fn migrate_v9(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        UPDATE entities  SET entity_type   = json_extract(entity_type,   '$.custom') WHERE entity_type   LIKE '{%';
+        UPDATE entities  SET entity_type   = json_extract(entity_type,   '$')        WHERE entity_type   LIKE '\"%';
+        UPDATE relations SET relation_type = json_extract(relation_type, '$.custom') WHERE relation_type LIKE '{%';
+        UPDATE relations SET relation_type = json_extract(relation_type, '$')        WHERE relation_type LIKE '\"%';
+
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (9, datetime('now'), 'Flatten entity_type/relation_type to plain strings');
         ",
     )?;
     Ok(())

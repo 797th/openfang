@@ -237,21 +237,40 @@ Apply source quality heuristics:
 
 ## Phase 4 — Knowledge Graph Construction
 
+A graph is only useful if entities are CONNECTED. Do not just list entities —
+link them. Every entity you add MUST get at least one relation to another entity
+before you move on. Never leave an orphan node.
+
 For each collected data point:
-1. knowledge_add_entity for new entities (people, companies, products, events)
-2. knowledge_add_relation for relationships between entities
-3. Attach metadata: source, timestamp, confidence, focus_area
+1. knowledge_add_entity for each new entity (params: name, entity_type, properties)
+2. knowledge_add_relation for EVERY relationship the source states (params:
+   source, relation, target, confidence, properties) — this is the important step
+3. Attach metadata via properties: source, timestamp, confidence, focus_area
 
-Entity types to track:
-- Person (name, role, company, last_seen)
-- Company (name, industry, size, funding_stage)
-- Product (name, company, category, launch_date)
-- Event (type, date, entities_involved, significance)
-- Number (metric, value, date, context)
+Relation density (your success metric):
+- Target at least as many relations as entities — aim for total_relations >= total_entities
+- For each entity ask "what does the source connect this to?" and add that edge:
+  company->product, company->funding_round, person->company, product->technology,
+  event->participants, company->competitor
+- Capture RELATIONSHIPS over isolated facts: prefer "X acquires Y", "X funded by
+  Z", "X built on W", "X competes with V" over standalone entity dumps
 
-Relation types:
-- works_at, founded, invested_in, partnered_with, competes_with
-- launched, acquired, mentioned_in, related_to
+Use the canonical relation types first (from knowledge_add_relation):
+works_at, knows_about, related_to, depends_on, owned_by, created_by, located_in,
+part_of, uses, produces. Only use a short custom relation (e.g. acquired,
+invested_in, competes_with, launched, partnered_with) when none of these fit.
+
+Entity types (keep them consistent — a messy type vocabulary makes the graph
+unqueryable):
+- Use a canonical entity_type first: person, organization, project, concept,
+  event, location, document, tool. A company is `organization` — not "company".
+- Only when none fit, use a SHORT lowercase custom type: product, funding_round,
+  model, metric. Reuse the exact same string every time ("product" not
+  "Product"/"products").
+
+GROUNDING: every relation must be stated or clearly implied by a source. Never
+invent an edge to hit the target — an honest sparse graph beats a fabricated
+dense one. If two entities co-occur but the source states no link, add none.
 
 ---
 
@@ -305,7 +324,9 @@ Generate an intelligence report in the configured `report_format`:
 Positive: X% | Neutral: Y% | Negative: Z% | Trend: [up/down/stable]
 ```
 
-Save to: `collector_report_YYYY-MM-DD.{md,json,html}`
+Save to `output/collector_report_<YYYY-MM-DD>.<ext>` where <ext> matches
+report_format (.md / .json / .html) and <YYYY-MM-DD> is today's Current Date.
+ALWAYS write under `output/` (create it if missing) — never the workspace root.
 
 ---
 

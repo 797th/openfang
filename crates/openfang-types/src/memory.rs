@@ -153,6 +153,50 @@ pub enum EntityType {
     Custom(String),
 }
 
+impl std::fmt::Display for EntityType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            EntityType::Person => "person",
+            EntityType::Organization => "organization",
+            EntityType::Project => "project",
+            EntityType::Concept => "concept",
+            EntityType::Event => "event",
+            EntityType::Location => "location",
+            EntityType::Document => "document",
+            EntityType::Tool => "tool",
+            EntityType::Custom(s) => s.as_str(),
+        })
+    }
+}
+
+impl EntityType {
+    /// Parse the value stored in the `entity_type` DB column.
+    ///
+    /// Accepts the current flat form (`organization`, `product`) and the two
+    /// legacy `serde_json` forms this code used to write: a quoted scalar
+    /// (`"organization"`) and an object (`{"custom":"product"}`), so old rows
+    /// keep reading correctly with or without a data migration.
+    pub fn from_db_str(s: &str) -> Self {
+        let raw = s.trim();
+        if raw.starts_with('"') || raw.starts_with('{') {
+            if let Ok(v) = serde_json::from_str::<EntityType>(raw) {
+                return v;
+            }
+        }
+        match raw {
+            "person" => EntityType::Person,
+            "organization" => EntityType::Organization,
+            "project" => EntityType::Project,
+            "concept" => EntityType::Concept,
+            "event" => EntityType::Event,
+            "location" => EntityType::Location,
+            "document" => EntityType::Document,
+            "tool" => EntityType::Tool,
+            other => EntityType::Custom(other.to_string()),
+        }
+    }
+}
+
 /// A relation between two entities in the knowledge graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Relation {
@@ -196,6 +240,53 @@ pub enum RelationType {
     Produces,
     /// A custom relation type.
     Custom(String),
+}
+
+impl std::fmt::Display for RelationType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            RelationType::WorksAt => "works_at",
+            RelationType::KnowsAbout => "knows_about",
+            RelationType::RelatedTo => "related_to",
+            RelationType::DependsOn => "depends_on",
+            RelationType::OwnedBy => "owned_by",
+            RelationType::CreatedBy => "created_by",
+            RelationType::LocatedIn => "located_in",
+            RelationType::PartOf => "part_of",
+            RelationType::Uses => "uses",
+            RelationType::Produces => "produces",
+            RelationType::Custom(s) => s.as_str(),
+        })
+    }
+}
+
+impl RelationType {
+    /// Parse the value stored in the `relation_type` DB column. Accepts the
+    /// flat form (`works_at`, `invested_in`) and the two legacy `serde_json`
+    /// forms (quoted scalar, `{"custom":...}` object). Unknown bare strings
+    /// become `Custom` (the graph should preserve custom relations, not
+    /// collapse them to `related_to`).
+    pub fn from_db_str(s: &str) -> Self {
+        let raw = s.trim();
+        if raw.starts_with('"') || raw.starts_with('{') {
+            if let Ok(v) = serde_json::from_str::<RelationType>(raw) {
+                return v;
+            }
+        }
+        match raw {
+            "works_at" => RelationType::WorksAt,
+            "knows_about" => RelationType::KnowsAbout,
+            "related_to" => RelationType::RelatedTo,
+            "depends_on" => RelationType::DependsOn,
+            "owned_by" => RelationType::OwnedBy,
+            "created_by" => RelationType::CreatedBy,
+            "located_in" => RelationType::LocatedIn,
+            "part_of" => RelationType::PartOf,
+            "uses" => RelationType::Uses,
+            "produces" => RelationType::Produces,
+            other => RelationType::Custom(other.to_string()),
+        }
+    }
 }
 
 /// A pattern for querying the knowledge graph.
