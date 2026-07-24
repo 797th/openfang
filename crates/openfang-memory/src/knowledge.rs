@@ -7,7 +7,7 @@ use openfang_types::error::{OpenFangError, OpenFangResult};
 use openfang_types::memory::{
     Entity, EntityType, GraphMatch, GraphPattern, Relation, RelationType,
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -30,8 +30,24 @@ impl KnowledgeStore {
             .conn
             .lock()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        // Choose the row id. Callers that pass an explicit id upsert on it.
+        // Callers that leave the id empty (the `knowledge_add_entity` tool
+        // always does) are de-duplicated by NAME: if an entity with the same
+        // name already exists we reuse its id and UPDATE it, instead of
+        // inserting a brand-new UUID row every time. Without this the graph
+        // accumulated a fresh row for the same "NVIDIA"/"Boston Dynamics" on
+        // every collection sweep, because `ON CONFLICT(id)` can never fire on
+        // a freshly-generated UUID.
         let id = if entity.id.is_empty() {
-            Uuid::new_v4().to_string()
+            let existing: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM entities WHERE name = ?1 LIMIT 1",
+                    rusqlite::params![entity.name],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            existing.unwrap_or_else(|| Uuid::new_v4().to_string())
         } else {
             entity.id.clone()
         };
@@ -40,10 +56,13 @@ impl KnowledgeStore {
         let props_str = serde_json::to_string(&entity.properties)
             .map_err(|e| OpenFangError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
+        // On conflict, keep the original created_at (first-seen time) and only
+        // refresh the mutable columns + updated_at.
         conn.execute(
             "INSERT INTO entities (id, entity_type, name, properties, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?5)
-             ON CONFLICT(id) DO UPDATE SET name = ?3, properties = ?4, updated_at = ?5",
+             ON CONFLICT(id) DO UPDATE SET
+                 entity_type = ?2, name = ?3, properties = ?4, updated_at = ?5",
             rusqlite::params![id, entity_type_str, entity.name, props_str, now],
         )
         .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -296,6 +315,50 @@ mod tests {
             })
             .unwrap();
         assert!(!id.is_empty());
+    }
+
+    fn count_entities(store: &KnowledgeStore) -> i64 {
+        let conn = store.conn.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM entities", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn test_add_entity_dedupes_by_name() {
+        let store = setup();
+        // Same name added three times the way the tool does it — empty id.
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            ids.push(
+                store
+                    .add_entity(Entity {
+                        id: String::new(),
+                        entity_type: EntityType::Organization,
+                        name: "NVIDIA".to_string(),
+                        properties: HashMap::new(),
+                        created_at: Utc::now(),
+                        updated_at: Utc::now(),
+                    })
+                    .unwrap(),
+            );
+        }
+        // All three calls resolve to the SAME id and only ONE row exists.
+        assert_eq!(ids[0], ids[1]);
+        assert_eq!(ids[1], ids[2]);
+        assert_eq!(count_entities(&store), 1, "expected one deduped NVIDIA row");
+
+        // A different name is still a separate row.
+        store
+            .add_entity(Entity {
+                id: String::new(),
+                entity_type: EntityType::Organization,
+                name: "Boston Dynamics".to_string(),
+                properties: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .unwrap();
+        assert_eq!(count_entities(&store), 2);
     }
 
     #[test]

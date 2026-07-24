@@ -311,7 +311,18 @@ Save to: `collector_report_YYYY-MM-DD.{md,json,html}`
 
 ## Phase 7 — State Persistence
 
-1. Save updated knowledge base to `collector_knowledge_base.json`
+**CRITICAL — do this BEFORE you send your final reply, not after.** If you
+reply first you will stop here and the snapshot will never be written, which
+silently breaks change detection: the next run diffs against a stale snapshot
+and re-reports everything as "new". Persisting state is not optional and not
+the last thing you do — it is a prerequisite for replying.
+
+1. Save the updated knowledge base to `collector_knowledge_base.json`,
+   OVERWRITING the previous file. It must reflect THIS run: bump `cycle`,
+   set `collection_date` to today's Current Date, and update
+   `total_entities` / `total_relations` / `total_sources` to the real
+   current counts. A run that did not rewrite this file has failed its job
+   even if it produced a report.
 2. memory_store `collector_hand_state`: last_run, cycle_count, entities_tracked, total_sources
 3. Update dashboard stats:
    - memory_store `collector_hand_data_points` — total data points collected
