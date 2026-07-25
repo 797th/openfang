@@ -113,8 +113,8 @@ impl KnowledgeStore {
                 r.id, r.source_entity, r.relation_type, r.target_entity, r.properties, r.confidence, r.created_at,
                 t.id, t.entity_type, t.name, t.properties, t.created_at, t.updated_at
              FROM relations r
-             JOIN entities s ON r.source_entity = s.id
-             JOIN entities t ON r.target_entity = t.id
+             JOIN entities s ON (r.source_entity = s.id OR r.source_entity = s.name)
+             JOIN entities t ON (r.target_entity = t.id OR r.target_entity = t.name)
              WHERE 1=1",
         );
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -411,6 +411,70 @@ mod tests {
             EntityType::from_db_str("{\"custom\":\"product\"}"),
             EntityType::Custom("product".to_string())
         );
+    }
+
+    #[test]
+    fn test_relation_stored_by_name_is_queryable() {
+        // The knowledge_add_relation tool passes whatever source/target strings
+        // the model supplied — i.e. entity NAMES — while add_entity keys rows by
+        // a generated UUID. Joining only on `id` therefore matched nothing and
+        // silently hid the entire graph (a live DB had 348 relations of which
+        // exactly 1 was reachable). The join must accept id OR name.
+        let store = setup();
+        store
+            .add_entity(Entity {
+                id: String::new(),
+                entity_type: EntityType::Organization,
+                name: "NVIDIA".to_string(),
+                properties: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .unwrap();
+        store
+            .add_entity(Entity {
+                id: String::new(),
+                entity_type: EntityType::Custom("product".to_string()),
+                name: "Isaac GR00T".to_string(),
+                properties: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .unwrap();
+        // Relation references entities BY NAME, exactly as the tool does.
+        store
+            .add_relation(Relation {
+                source: "NVIDIA".to_string(),
+                relation: RelationType::Custom("develops".to_string()),
+                target: "Isaac GR00T".to_string(),
+                properties: HashMap::new(),
+                confidence: 1.0,
+                created_at: Utc::now(),
+            })
+            .unwrap();
+
+        let matches = store
+            .query_graph(GraphPattern {
+                source: Some("NVIDIA".to_string()),
+                relation: None,
+                target: None,
+                max_depth: 1,
+            })
+            .unwrap();
+        assert_eq!(matches.len(), 1, "name-keyed relation must be queryable");
+        assert_eq!(matches[0].source.name, "NVIDIA");
+        assert_eq!(matches[0].target.name, "Isaac GR00T");
+
+        // And an unfiltered query must see it too.
+        let all = store
+            .query_graph(GraphPattern {
+                source: None,
+                relation: None,
+                target: None,
+                max_depth: 1,
+            })
+            .unwrap();
+        assert_eq!(all.len(), 1, "unfiltered query must see the edge");
     }
 
     #[test]
