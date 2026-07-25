@@ -237,45 +237,59 @@ Apply source quality heuristics:
 
 ## Phase 4 — Knowledge Graph Construction
 
-FOCUS: map COMPANIES and what they DO — products, models, launches, funding,
-acquisitions, partnerships, and the technology they build. Organizations and
-their activities are the point. Do NOT spend effort cataloguing individual
-people (employees, executives, researchers); skip a person unless they are
-essential to a company move (e.g. a founder announcing a launch), and if so,
-connect them to the company rather than making them the subject.
+FOCUS — THE UNIT OF OBSERVATION IS THE THING SHIPPED.
 
-A graph is only useful if entities are CONNECTED. Link them — every entity you
-add MUST get at least one relation. Never leave an orphan node.
+Record what actually LAUNCHED: products, models, framework/major releases,
+demonstrated capabilities. Announcements are talk; launches are revealed
+behaviour, and they are what shows where the field is actually moving. A
+company matters as the maker of a thing, not as a subject in its own right.
+Funding and M&A are secondary context — capture them, but never at the expense
+of the artifact. Skip individual people almost entirely.
 
-For each collected data point:
-1. knowledge_add_entity for each new entity (params: name, entity_type, properties)
-2. knowledge_add_relation for EVERY relationship the source states — the key step
-3. Put descriptive facts (date, description, license, metrics) in properties. BUT
-   if a property value NAMES another entity (its maker, owner, investor, parent,
-   partner, competitor), make that an EDGE instead — never bury a company link in
-   a property string.
+Every shipped artifact MUST record:
+  1. what it is         -> entity_type product | model | technology
+  2. its CATEGORY       -> a `category` node it belongs_to (this is how trends
+                           are computed later — never omit it)
+  3. who shipped it     -> organization -launched-> artifact
+  4. what it is BUILT ON -> artifact -builds_on/uses-> technology|model
+  5. WHEN               -> a `date` property in YYYY-MM-DD (or YYYY-MM) form.
+                           MANDATORY. Momentum cannot be computed without it;
+                           an artifact with no date is near-worthless. If the
+                           source gives no date, use the article/publication
+                           date and note it in properties.
 
-Relation density (your success metric):
-- Aim for total_relations >= total_entities
-- Prefer company-centric edges:
-  organization -develops/launched-> product|model
+A graph is only useful if entities are CONNECTED. Every entity you add MUST get
+at least one relation. Never leave an orphan node. Aim for
+total_relations >= total_entities.
+
+Put descriptive facts (description, license, metrics, version) in properties.
+BUT if a property value NAMES another entity (its maker, category, the thing it
+is built on, owner, investor, partner, competitor), make it an EDGE instead —
+never bury a link in a property string.
+
+The spine to build, over and over:
+  organization -launched/develops-> product|model
+  product|model -belongs_to-> category
+  product|model -builds_on/uses-> technology|model
+  product|model -targets-> use_case
   organization -acquired/partners_with/competes_with-> organization
-  investor -invested_in-> organization   organization -funded_by-> investor|funding_round
-  product|model -builds_on/uses-> technology
+  organization -funded_by-> funding_round
 
 CONTROLLED VOCABULARY — use ONLY these, lowercase, reused identically (never
 "Product"/"products"). Coin a new single-lowercase label only when nothing fits.
 
-entity_type (pick one; organization/product/model matter most):
-  organization, product, model, technology, funding_round, investor, research,
-  event, metric, location, person
-  — a company/startup/lab is `organization`; an AI/ML model or system is `model`;
-    a paper/benchmark is `research`. Use `person` sparingly.
+entity_type (pick one; product/model/category are the spine):
+  product, model, technology, category, use_case, organization, research,
+  funding_round, event, metric, person
+  — an AI/ML model or system is `model`; a shipped tool/framework/device is
+    `product`; an underlying method/platform is `technology`; `category` is a
+    broad grouping (e.g. humanoid_robots, robot_simulation, vla_models) and is
+    REQUIRED for every artifact. Use `person` almost never.
 
 relation (pick one):
-  develops, produces, launched, acquired, invested_in, funded_by,
-  competes_with, partners_with, builds_on, uses, owned_by, part_of,
-  located_in, related_to
+  launched, develops, belongs_to, builds_on, uses, targets, produces,
+  acquired, partners_with, competes_with, funded_by, invested_in,
+  owned_by, part_of, related_to
 
 GROUNDING: every relation must be stated or clearly implied by a source. Never
 invent an edge. If two entities co-occur but the source states no link, add none.
