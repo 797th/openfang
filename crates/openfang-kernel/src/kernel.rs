@@ -332,6 +332,27 @@ fn ensure_workspace(workspace: &Path) -> KernelResult<()> {
 
 /// Generate workspace identity files for an agent (SOUL.md, USER.md, TOOLS.md, MEMORY.md).
 /// Uses `create_new` to never overwrite existing files (preserves user edits).
+/// True if an entity carries something that looks like a date.
+///
+/// Accepts any of the common property names an LLM reaches for, so the check
+/// enforces "a date is present" without dictating one exact key.
+fn has_date_property(props: &std::collections::HashMap<String, serde_json::Value>) -> bool {
+    const DATE_KEYS: [&str; 6] = [
+        "date",
+        "release_date",
+        "launch_date",
+        "published_date",
+        "announced_date",
+        "created_date",
+    ];
+    DATE_KEYS.iter().any(|k| {
+        props
+            .get(*k)
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.trim().is_empty())
+    })
+}
+
 fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -7392,6 +7413,21 @@ impl KernelHandle for OpenFangKernel {
         &self,
         entity: openfang_types::memory::Entity,
     ) -> Result<String, String> {
+        let kc = &self.config.knowledge;
+        let ty = entity.entity_type.to_string();
+        if !kc.allowed_entity_types.is_empty() && !kc.allowed_entity_types.contains(&ty) {
+            return Err(format!(
+                "entity_type '{ty}' is not in the allowed vocabulary. Use exactly one of: {}. \
+                 Pick the closest match — do not invent a variant.",
+                kc.allowed_entity_types.join(", ")
+            ));
+        }
+        if kc.require_date_on.contains(&ty) && !has_date_property(&entity.properties) {
+            return Err(format!(
+                "entity_type '{ty}' requires a date. Add a `date` property in YYYY-MM-DD or \
+                 YYYY-MM form (fall back to the source's publication date)."
+            ));
+        }
         self.memory
             .add_entity(entity)
             .await
@@ -7402,6 +7438,16 @@ impl KernelHandle for OpenFangKernel {
         &self,
         relation: openfang_types::memory::Relation,
     ) -> Result<String, String> {
+        let kc = &self.config.knowledge;
+        let rel = relation.relation.to_string();
+        if !kc.allowed_relations.is_empty() && !kc.allowed_relations.contains(&rel) {
+            return Err(format!(
+                "relation '{rel}' is not in the allowed vocabulary. Use exactly one of: {}. \
+                 Pick the closest match — do not invent a variant (e.g. no '_at' suffixes, \
+                 no tense changes).",
+                kc.allowed_relations.join(", ")
+            ));
+        }
         self.memory
             .add_relation(relation)
             .await

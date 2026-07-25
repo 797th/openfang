@@ -1183,6 +1183,9 @@ pub struct KernelConfig {
     pub default_model: DefaultModelConfig,
     /// Memory substrate configuration.
     pub memory: MemoryConfig,
+    /// Knowledge-graph vocabulary constraints.
+    #[serde(default)]
+    pub knowledge: KnowledgeConfig,
     /// Network configuration.
     pub network: NetworkConfig,
     /// Channel bridge configuration (Telegram, etc.).
@@ -1525,6 +1528,7 @@ impl Default for KernelConfig {
             network_enabled: false,
             default_model: DefaultModelConfig::default(),
             memory: MemoryConfig::default(),
+            knowledge: KnowledgeConfig::default(),
             network: NetworkConfig::default(),
             channels: ChannelsConfig::default(),
             api_key: String::new(),
@@ -1733,6 +1737,38 @@ impl Default for DefaultModelConfig {
             subprocess_timeout_secs: None,
         }
     }
+}
+
+/// Knowledge-graph vocabulary constraints.
+///
+/// A graph is only queryable if labels are consistent. LLMs asked to "use only
+/// these types" comply unreliably — a live collector run produced 27%
+/// compliance and near-duplicate relations (`deployed` / `deployed_at`,
+/// `unveiled` / `unveiled_at`). These lists are therefore enforced in the
+/// kernel rather than merely requested in a prompt.
+///
+/// Both lists default to EMPTY, which means "no validation" — existing
+/// deployments are unaffected until they opt in via `config.toml`:
+///
+/// ```toml
+/// [knowledge]
+/// allowed_entity_types = ["product", "model", "organization", "category"]
+/// allowed_relations = ["launched", "belongs_to", "builds_on", "related_to"]
+/// ```
+///
+/// Editing `config.toml` needs no rebuild, so the vocabulary can be tuned as a
+/// domain evolves.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KnowledgeConfig {
+    /// Permitted `entity_type` values. Empty = allow anything.
+    pub allowed_entity_types: Vec<String>,
+    /// Permitted relation names. Empty = allow anything.
+    pub allowed_relations: Vec<String>,
+    /// Entity types that must carry a date-ish property. Empty = not enforced.
+    /// Momentum/trend queries are impossible without dates, so a collector
+    /// building a time series wants e.g. `["product", "model"]`.
+    pub require_date_on: Vec<String>,
 }
 
 /// Memory substrate configuration.
