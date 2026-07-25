@@ -255,18 +255,21 @@ Relation density (your success metric):
 - Capture RELATIONSHIPS over isolated facts: prefer "X acquires Y", "X funded by
   Z", "X built on W", "X competes with V" over standalone entity dumps
 
-Use the canonical relation types first (from knowledge_add_relation):
-works_at, knows_about, related_to, depends_on, owned_by, created_by, located_in,
-part_of, uses, produces. Only use a short custom relation (e.g. acquired,
-invested_in, competes_with, launched, partnered_with) when none of these fit.
+CONTROLLED VOCABULARY — use ONLY these labels so the graph stays queryable.
+Pick exactly one, lowercase, and reuse it identically every time (never
+"Product"/"products"/"software"). Coin a new single-lowercase label only when
+nothing here fits, and reuse that new label consistently too.
 
-Entity types (keep them consistent — a messy type vocabulary makes the graph
-unqueryable):
-- Use a canonical entity_type first: person, organization, project, concept,
-  event, location, document, tool. A company is `organization` — not "company".
-- Only when none fit, use a SHORT lowercase custom type: product, funding_round,
-  model, metric. Reuse the exact same string every time ("product" not
-  "Product"/"products").
+entity_type (pick one):
+  person, organization, product, model, technology, investor, funding_round,
+  research, event, location, metric
+  — a company/startup/lab is `organization`; an AI/ML model or system is
+    `model`; a paper/study/benchmark is `research`.
+
+relation (pick one):
+  develops, produces, launched, acquired, invested_in, funded_by,
+  competes_with, partners_with, employs, works_at, builds_on, uses,
+  owned_by, part_of, located_in, related_to
 
 GROUNDING: every relation must be stated or clearly implied by a source. Never
 invent an edge to hit the target — an honest sparse graph beats a fabricated
