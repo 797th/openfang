@@ -337,15 +337,7 @@ fn ensure_workspace(workspace: &Path) -> KernelResult<()> {
 /// Accepts any of the common property names an LLM reaches for, so the check
 /// enforces "a date is present" without dictating one exact key.
 fn has_date_property(props: &std::collections::HashMap<String, serde_json::Value>) -> bool {
-    const DATE_KEYS: [&str; 6] = [
-        "date",
-        "release_date",
-        "launch_date",
-        "published_date",
-        "announced_date",
-        "created_date",
-    ];
-    DATE_KEYS.iter().any(|k| {
+    openfang_types::config::DATE_PROPERTY_KEYS.iter().any(|k| {
         props
             .get(*k)
             .and_then(|v| v.as_str())
@@ -7415,14 +7407,8 @@ impl KernelHandle for OpenFangKernel {
     ) -> Result<String, String> {
         let kc = &self.config.knowledge;
         let ty = entity.entity_type.to_string();
-        if !kc.allowed_entity_types.is_empty() && !kc.allowed_entity_types.contains(&ty) {
-            return Err(format!(
-                "entity_type '{ty}' is not in the allowed vocabulary. Use exactly one of: {}. \
-                 Pick the closest match — do not invent a variant.",
-                kc.allowed_entity_types.join(", ")
-            ));
-        }
-        if kc.require_date_on.contains(&ty) && !has_date_property(&entity.properties) {
+        kc.validate_entity_type(&ty)?;
+        if kc.requires_date(&ty) && !has_date_property(&entity.properties) {
             return Err(format!(
                 "entity_type '{ty}' requires a date. Add a `date` property in YYYY-MM-DD or \
                  YYYY-MM form (fall back to the source's publication date)."
@@ -7438,16 +7424,9 @@ impl KernelHandle for OpenFangKernel {
         &self,
         relation: openfang_types::memory::Relation,
     ) -> Result<String, String> {
-        let kc = &self.config.knowledge;
-        let rel = relation.relation.to_string();
-        if !kc.allowed_relations.is_empty() && !kc.allowed_relations.contains(&rel) {
-            return Err(format!(
-                "relation '{rel}' is not in the allowed vocabulary. Use exactly one of: {}. \
-                 Pick the closest match — do not invent a variant (e.g. no '_at' suffixes, \
-                 no tense changes).",
-                kc.allowed_relations.join(", ")
-            ));
-        }
+        self.config
+            .knowledge
+            .validate_relation(&relation.relation.to_string())?;
         self.memory
             .add_relation(relation)
             .await
