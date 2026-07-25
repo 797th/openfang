@@ -262,6 +262,17 @@ A graph is only useful if entities are CONNECTED. Every entity you add MUST get
 at least one relation. Never leave an orphan node. Aim for
 total_relations >= total_entities.
 
+HARD SCOPE LIMIT — recording an artifact fully costs ~6 tool calls (the
+artifact, its category, its maker, plus the belongs_to / launched / builds_on
+edges). You do NOT have the budget to record everything you find.
+
+  * Record AT MOST 10 new artifacts per run. Count them as you go.
+  * On reaching 10 — or once you have used roughly half your tool calls,
+    whichever comes first — STOP COLLECTING IMMEDIATELY and move to the report.
+  * Choose the 10 most significant items; ignore the rest. Ten fully-connected
+    artifacts are worth far more than forty half-recorded ones, and a run that
+    exhausts its iterations delivers NOTHING at all.
+
 Put descriptive facts (description, license, metrics, version) in properties.
 BUT if a property value NAMES another entity (its maker, category, the thing it
 is built on, owner, investor, partner, competitor), make it an EDGE instead —
