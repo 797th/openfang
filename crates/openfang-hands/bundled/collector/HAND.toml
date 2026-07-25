@@ -237,43 +237,48 @@ Apply source quality heuristics:
 
 ## Phase 4 — Knowledge Graph Construction
 
-A graph is only useful if entities are CONNECTED. Do not just list entities —
-link them. Every entity you add MUST get at least one relation to another entity
-before you move on. Never leave an orphan node.
+FOCUS: map COMPANIES and what they DO — products, models, launches, funding,
+acquisitions, partnerships, and the technology they build. Organizations and
+their activities are the point. Do NOT spend effort cataloguing individual
+people (employees, executives, researchers); skip a person unless they are
+essential to a company move (e.g. a founder announcing a launch), and if so,
+connect them to the company rather than making them the subject.
+
+A graph is only useful if entities are CONNECTED. Link them — every entity you
+add MUST get at least one relation. Never leave an orphan node.
 
 For each collected data point:
 1. knowledge_add_entity for each new entity (params: name, entity_type, properties)
-2. knowledge_add_relation for EVERY relationship the source states (params:
-   source, relation, target, confidence, properties) — this is the important step
-3. Attach metadata via properties: source, timestamp, confidence, focus_area
+2. knowledge_add_relation for EVERY relationship the source states — the key step
+3. Put descriptive facts (date, description, license, metrics) in properties. BUT
+   if a property value NAMES another entity (its maker, owner, investor, parent,
+   partner, competitor), make that an EDGE instead — never bury a company link in
+   a property string.
 
 Relation density (your success metric):
-- Target at least as many relations as entities — aim for total_relations >= total_entities
-- For each entity ask "what does the source connect this to?" and add that edge:
-  company->product, company->funding_round, person->company, product->technology,
-  event->participants, company->competitor
-- Capture RELATIONSHIPS over isolated facts: prefer "X acquires Y", "X funded by
-  Z", "X built on W", "X competes with V" over standalone entity dumps
+- Aim for total_relations >= total_entities
+- Prefer company-centric edges:
+  organization -develops/launched-> product|model
+  organization -acquired/partners_with/competes_with-> organization
+  investor -invested_in-> organization   organization -funded_by-> investor|funding_round
+  product|model -builds_on/uses-> technology
 
-CONTROLLED VOCABULARY — use ONLY these labels so the graph stays queryable.
-Pick exactly one, lowercase, and reuse it identically every time (never
-"Product"/"products"/"software"). Coin a new single-lowercase label only when
-nothing here fits, and reuse that new label consistently too.
+CONTROLLED VOCABULARY — use ONLY these, lowercase, reused identically (never
+"Product"/"products"). Coin a new single-lowercase label only when nothing fits.
 
-entity_type (pick one):
-  person, organization, product, model, technology, investor, funding_round,
-  research, event, location, metric
-  — a company/startup/lab is `organization`; an AI/ML model or system is
-    `model`; a paper/study/benchmark is `research`.
+entity_type (pick one; organization/product/model matter most):
+  organization, product, model, technology, funding_round, investor, research,
+  event, metric, location, person
+  — a company/startup/lab is `organization`; an AI/ML model or system is `model`;
+    a paper/benchmark is `research`. Use `person` sparingly.
 
 relation (pick one):
   develops, produces, launched, acquired, invested_in, funded_by,
-  competes_with, partners_with, employs, works_at, builds_on, uses,
-  owned_by, part_of, located_in, related_to
+  competes_with, partners_with, builds_on, uses, owned_by, part_of,
+  located_in, related_to
 
 GROUNDING: every relation must be stated or clearly implied by a source. Never
-invent an edge to hit the target — an honest sparse graph beats a fabricated
-dense one. If two entities co-occur but the source states no link, add none.
+invent an edge. If two entities co-occur but the source states no link, add none.
 
 ---
 
