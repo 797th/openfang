@@ -7,7 +7,7 @@ use openfang_types::error::{OpenFangError, OpenFangResult};
 use openfang_types::memory::{
     Entity, EntityType, GraphMatch, GraphPattern, Relation, RelationType,
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -30,20 +30,42 @@ impl KnowledgeStore {
             .conn
             .lock()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
+        // Choose the row id. Callers that pass an explicit id upsert on it.
+        // Callers that leave the id empty (the `knowledge_add_entity` tool
+        // always does) are de-duplicated by NAME: if an entity with the same
+        // name already exists we reuse its id and UPDATE it, instead of
+        // inserting a brand-new UUID row every time. Without this the graph
+        // accumulated a fresh row for the same "NVIDIA"/"Boston Dynamics" on
+        // every collection sweep, because `ON CONFLICT(id)` can never fire on
+        // a freshly-generated UUID.
         let id = if entity.id.is_empty() {
-            Uuid::new_v4().to_string()
+            let existing: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM entities WHERE name = ?1 LIMIT 1",
+                    rusqlite::params![entity.name],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| OpenFangError::Memory(e.to_string()))?;
+            existing.unwrap_or_else(|| Uuid::new_v4().to_string())
         } else {
             entity.id.clone()
         };
-        let entity_type_str = serde_json::to_string(&entity.entity_type)
-            .map_err(|e| OpenFangError::Serialization(e.to_string()))?;
+        // Store a flat, queryable type string ("organization", "product") —
+        // not serde_json of the enum, which wrote known variants as quoted
+        // scalars and custom ones as objects, so the column could not be
+        // cleanly grouped/filtered or imported into a graph DB.
+        let entity_type_str = entity.entity_type.to_string();
         let props_str = serde_json::to_string(&entity.properties)
             .map_err(|e| OpenFangError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
+        // On conflict, keep the original created_at (first-seen time) and only
+        // refresh the mutable columns + updated_at.
         conn.execute(
             "INSERT INTO entities (id, entity_type, name, properties, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?5)
-             ON CONFLICT(id) DO UPDATE SET name = ?3, properties = ?4, updated_at = ?5",
+             ON CONFLICT(id) DO UPDATE SET
+                 entity_type = ?2, name = ?3, properties = ?4, updated_at = ?5",
             rusqlite::params![id, entity_type_str, entity.name, props_str, now],
         )
         .map_err(|e| OpenFangError::Memory(e.to_string()))?;
@@ -57,8 +79,7 @@ impl KnowledgeStore {
             .lock()
             .map_err(|e| OpenFangError::Internal(e.to_string()))?;
         let id = Uuid::new_v4().to_string();
-        let rel_type_str = serde_json::to_string(&relation.relation)
-            .map_err(|e| OpenFangError::Serialization(e.to_string()))?;
+        let rel_type_str = relation.relation.to_string();
         let props_str = serde_json::to_string(&relation.properties)
             .map_err(|e| OpenFangError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
@@ -92,8 +113,8 @@ impl KnowledgeStore {
                 r.id, r.source_entity, r.relation_type, r.target_entity, r.properties, r.confidence, r.created_at,
                 t.id, t.entity_type, t.name, t.properties, t.created_at, t.updated_at
              FROM relations r
-             JOIN entities s ON r.source_entity = s.id
-             JOIN entities t ON r.target_entity = t.id
+             JOIN entities s ON (r.source_entity = s.id OR r.source_entity = s.name)
+             JOIN entities t ON (r.target_entity = t.id OR r.target_entity = t.name)
              WHERE 1=1",
         );
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -106,8 +127,9 @@ impl KnowledgeStore {
             idx += 2;
         }
         if let Some(ref relation) = pattern.relation {
-            let rel_str = serde_json::to_string(relation)
-                .map_err(|e| OpenFangError::Serialization(e.to_string()))?;
+            // Must match the storage format written by add_relation (flat
+            // string), or relation filtering silently returns nothing.
+            let rel_str = relation.to_string();
             sql.push_str(&format!(" AND r.relation_type = ?{idx}"));
             params.push(Box::new(rel_str));
             idx += 1;
@@ -227,8 +249,7 @@ fn parse_entity(
     created: &str,
     updated: &str,
 ) -> Entity {
-    let entity_type: EntityType =
-        serde_json::from_str(etype).unwrap_or(EntityType::Custom("unknown".to_string()));
+    let entity_type = EntityType::from_db_str(etype);
     let properties: HashMap<String, serde_json::Value> =
         serde_json::from_str(props).unwrap_or_default();
     let created_at = chrono::DateTime::parse_from_rfc3339(created)
@@ -255,7 +276,7 @@ fn parse_relation(
     confidence: f64,
     created: &str,
 ) -> Relation {
-    let relation: RelationType = serde_json::from_str(rtype).unwrap_or(RelationType::RelatedTo);
+    let relation = RelationType::from_db_str(rtype);
     let properties: HashMap<String, serde_json::Value> =
         serde_json::from_str(props).unwrap_or_default();
     let created_at = chrono::DateTime::parse_from_rfc3339(created)
@@ -296,6 +317,164 @@ mod tests {
             })
             .unwrap();
         assert!(!id.is_empty());
+    }
+
+    fn count_entities(store: &KnowledgeStore) -> i64 {
+        let conn = store.conn.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM entities", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn test_add_entity_dedupes_by_name() {
+        let store = setup();
+        // Same name added three times the way the tool does it — empty id.
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            ids.push(
+                store
+                    .add_entity(Entity {
+                        id: String::new(),
+                        entity_type: EntityType::Organization,
+                        name: "NVIDIA".to_string(),
+                        properties: HashMap::new(),
+                        created_at: Utc::now(),
+                        updated_at: Utc::now(),
+                    })
+                    .unwrap(),
+            );
+        }
+        // All three calls resolve to the SAME id and only ONE row exists.
+        assert_eq!(ids[0], ids[1]);
+        assert_eq!(ids[1], ids[2]);
+        assert_eq!(count_entities(&store), 1, "expected one deduped NVIDIA row");
+
+        // A different name is still a separate row.
+        store
+            .add_entity(Entity {
+                id: String::new(),
+                entity_type: EntityType::Organization,
+                name: "Boston Dynamics".to_string(),
+                properties: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .unwrap();
+        assert_eq!(count_entities(&store), 2);
+    }
+
+    fn raw_entity_type(store: &KnowledgeStore, name: &str) -> String {
+        let conn = store.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT entity_type FROM entities WHERE name = ?1",
+            rusqlite::params![name],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_entity_type_stored_flat() {
+        let store = setup();
+        store
+            .add_entity(Entity {
+                id: String::new(),
+                entity_type: EntityType::Organization,
+                name: "NVIDIA".to_string(),
+                properties: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .unwrap();
+        store
+            .add_entity(Entity {
+                id: String::new(),
+                entity_type: EntityType::Custom("product".to_string()),
+                name: "Isaac GR00T".to_string(),
+                properties: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .unwrap();
+        // Flat strings — no quotes, no {"custom":...} objects.
+        assert_eq!(raw_entity_type(&store, "NVIDIA"), "organization");
+        assert_eq!(raw_entity_type(&store, "Isaac GR00T"), "product");
+    }
+
+    #[test]
+    fn test_entity_type_from_db_str_reads_all_forms() {
+        // Flat (new), quoted scalar (legacy), and object (legacy custom).
+        assert_eq!(EntityType::from_db_str("organization"), EntityType::Organization);
+        assert_eq!(EntityType::from_db_str("\"organization\""), EntityType::Organization);
+        assert_eq!(EntityType::from_db_str("product"), EntityType::Custom("product".to_string()));
+        assert_eq!(
+            EntityType::from_db_str("{\"custom\":\"product\"}"),
+            EntityType::Custom("product".to_string())
+        );
+    }
+
+    #[test]
+    fn test_relation_stored_by_name_is_queryable() {
+        // The knowledge_add_relation tool passes whatever source/target strings
+        // the model supplied — i.e. entity NAMES — while add_entity keys rows by
+        // a generated UUID. Joining only on `id` therefore matched nothing and
+        // silently hid the entire graph (a live DB had 348 relations of which
+        // exactly 1 was reachable). The join must accept id OR name.
+        let store = setup();
+        store
+            .add_entity(Entity {
+                id: String::new(),
+                entity_type: EntityType::Organization,
+                name: "NVIDIA".to_string(),
+                properties: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .unwrap();
+        store
+            .add_entity(Entity {
+                id: String::new(),
+                entity_type: EntityType::Custom("product".to_string()),
+                name: "Isaac GR00T".to_string(),
+                properties: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .unwrap();
+        // Relation references entities BY NAME, exactly as the tool does.
+        store
+            .add_relation(Relation {
+                source: "NVIDIA".to_string(),
+                relation: RelationType::Custom("develops".to_string()),
+                target: "Isaac GR00T".to_string(),
+                properties: HashMap::new(),
+                confidence: 1.0,
+                created_at: Utc::now(),
+            })
+            .unwrap();
+
+        let matches = store
+            .query_graph(GraphPattern {
+                source: Some("NVIDIA".to_string()),
+                relation: None,
+                target: None,
+                max_depth: 1,
+            })
+            .unwrap();
+        assert_eq!(matches.len(), 1, "name-keyed relation must be queryable");
+        assert_eq!(matches[0].source.name, "NVIDIA");
+        assert_eq!(matches[0].target.name, "Isaac GR00T");
+
+        // And an unfiltered query must see it too.
+        let all = store
+            .query_graph(GraphPattern {
+                source: None,
+                relation: None,
+                target: None,
+                max_depth: 1,
+            })
+            .unwrap();
+        assert_eq!(all.len(), 1, "unfiltered query must see the edge");
     }
 
     #[test]

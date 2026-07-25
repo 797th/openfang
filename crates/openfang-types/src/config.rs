@@ -1183,6 +1183,9 @@ pub struct KernelConfig {
     pub default_model: DefaultModelConfig,
     /// Memory substrate configuration.
     pub memory: MemoryConfig,
+    /// Knowledge-graph vocabulary constraints.
+    #[serde(default)]
+    pub knowledge: KnowledgeConfig,
     /// Network configuration.
     pub network: NetworkConfig,
     /// Channel bridge configuration (Telegram, etc.).
@@ -1525,6 +1528,7 @@ impl Default for KernelConfig {
             network_enabled: false,
             default_model: DefaultModelConfig::default(),
             memory: MemoryConfig::default(),
+            knowledge: KnowledgeConfig::default(),
             network: NetworkConfig::default(),
             channels: ChannelsConfig::default(),
             api_key: String::new(),
@@ -1732,6 +1736,89 @@ impl Default for DefaultModelConfig {
             base_url: None,
             subprocess_timeout_secs: None,
         }
+    }
+}
+
+/// Knowledge-graph vocabulary constraints.
+///
+/// A graph is only queryable if labels are consistent. LLMs asked to "use only
+/// these types" comply unreliably — a live collector run produced 27%
+/// compliance and near-duplicate relations (`deployed` / `deployed_at`,
+/// `unveiled` / `unveiled_at`). These lists are therefore enforced in the
+/// kernel rather than merely requested in a prompt.
+///
+/// Both lists default to EMPTY, which means "no validation" — existing
+/// deployments are unaffected until they opt in via `config.toml`:
+///
+/// ```toml
+/// [knowledge]
+/// allowed_entity_types = ["product", "model", "organization", "category"]
+/// allowed_relations = ["launched", "belongs_to", "builds_on", "related_to"]
+/// ```
+///
+/// Editing `config.toml` needs no rebuild, so the vocabulary can be tuned as a
+/// domain evolves.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KnowledgeConfig {
+    /// Permitted `entity_type` values. Empty = allow anything.
+    pub allowed_entity_types: Vec<String>,
+    /// Permitted relation names. Empty = allow anything.
+    pub allowed_relations: Vec<String>,
+    /// Entity types that must carry a date-ish property. Empty = not enforced.
+    /// Momentum/trend queries are impossible without dates, so a collector
+    /// building a time series wants e.g. `["product", "model"]`.
+    pub require_date_on: Vec<String>,
+}
+
+/// Property names accepted as "this entity has a date".
+///
+/// Deliberately permissive: the goal is to guarantee a date exists, not to
+/// dictate one exact key an LLM must guess.
+pub const DATE_PROPERTY_KEYS: [&str; 6] = [
+    "date",
+    "release_date",
+    "launch_date",
+    "published_date",
+    "announced_date",
+    "created_date",
+];
+
+impl KnowledgeConfig {
+    /// Validate an `entity_type` against the configured vocabulary.
+    ///
+    /// `Ok(())` when no vocabulary is configured (the default) or the type is
+    /// permitted. The error text names the permitted values so the model can
+    /// self-correct on retry rather than silently writing a junk label.
+    pub fn validate_entity_type(&self, ty: &str) -> Result<(), String> {
+        if self.allowed_entity_types.is_empty()
+            || self.allowed_entity_types.iter().any(|a| a == ty)
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "entity_type '{ty}' is not in the allowed vocabulary. Use exactly one of: {}. \
+             Pick the closest match — do not invent a variant.",
+            self.allowed_entity_types.join(", ")
+        ))
+    }
+
+    /// Validate a relation name against the configured vocabulary.
+    pub fn validate_relation(&self, rel: &str) -> Result<(), String> {
+        if self.allowed_relations.is_empty() || self.allowed_relations.iter().any(|a| a == rel) {
+            return Ok(());
+        }
+        Err(format!(
+            "relation '{rel}' is not in the allowed vocabulary. Use exactly one of: {}. \
+             Pick the closest match — do not invent a variant (e.g. no '_at' suffixes, \
+             no tense changes).",
+            self.allowed_relations.join(", ")
+        ))
+    }
+
+    /// Whether `entity_type` is required to carry a date property.
+    pub fn requires_date(&self, ty: &str) -> bool {
+        self.require_date_on.iter().any(|a| a == ty)
     }
 }
 
@@ -3945,6 +4032,116 @@ impl KernelConfig {
         } else if self.web.fetch.timeout_secs > 120 {
             self.web.fetch.timeout_secs = 120;
         }
+    }
+}
+
+#[cfg(test)]
+mod knowledge_vocab_tests {
+    use super::*;
+
+    fn cfg() -> KnowledgeConfig {
+        KnowledgeConfig {
+            allowed_entity_types: vec!["product".into(), "organization".into()],
+            allowed_relations: vec!["launched".into(), "belongs_to".into()],
+            require_date_on: vec!["product".into()],
+        }
+    }
+
+    #[test]
+    fn empty_vocabulary_allows_anything() {
+        // Default = opt-out. Existing deployments must be unaffected.
+        let c = KnowledgeConfig::default();
+        assert!(c.validate_entity_type("anything_at_all").is_ok());
+        assert!(c.validate_relation("going_public_via").is_ok());
+        assert!(!c.requires_date("product"));
+    }
+
+    #[test]
+    fn permitted_labels_pass() {
+        let c = cfg();
+        assert!(c.validate_entity_type("product").is_ok());
+        assert!(c.validate_entity_type("organization").is_ok());
+        assert!(c.validate_relation("launched").is_ok());
+        assert!(c.validate_relation("belongs_to").is_ok());
+    }
+
+    #[test]
+    fn off_vocabulary_labels_are_rejected() {
+        let c = cfg();
+        // The exact drift observed in a live run.
+        for bad in ["company", "use_case", "metric"] {
+            assert!(
+                c.validate_entity_type(bad).is_err(),
+                "entity_type '{bad}' should be rejected"
+            );
+        }
+        for bad in [
+            "deployed_at",
+            "unveiled",
+            "raising",
+            "released",
+            "going_public_via",
+            "works_at",
+        ] {
+            assert!(
+                c.validate_relation(bad).is_err(),
+                "relation '{bad}' should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejection_message_lists_the_permitted_values() {
+        // The model self-corrects from this text, so it must name the options.
+        let c = cfg();
+        let err = c.validate_relation("unveiled_at").unwrap_err();
+        assert!(err.contains("unveiled_at"), "names the offending label: {err}");
+        assert!(err.contains("launched"), "lists valid options: {err}");
+        assert!(err.contains("belongs_to"), "lists valid options: {err}");
+
+        let err = c.validate_entity_type("gizmo").unwrap_err();
+        assert!(err.contains("gizmo"));
+        assert!(err.contains("product"));
+    }
+
+    #[test]
+    fn validation_is_exact_not_fuzzy() {
+        // Near-misses must fail — that is the whole point.
+        let c = cfg();
+        assert!(c.validate_entity_type("Product").is_err(), "case matters");
+        assert!(c.validate_entity_type("products").is_err(), "plural is a variant");
+        assert!(c.validate_relation("launch").is_err(), "stem is a variant");
+    }
+
+    #[test]
+    fn requires_date_only_for_listed_types() {
+        let c = cfg();
+        assert!(c.requires_date("product"));
+        assert!(!c.requires_date("organization"));
+    }
+
+    #[test]
+    fn knowledge_section_parses_from_toml() {
+        // The config.toml shape operators will actually write.
+        let toml_src = r#"
+            allowed_entity_types = ["product", "model"]
+            allowed_relations = ["launched", "builds_on"]
+            require_date_on = ["product"]
+        "#;
+        let c: KnowledgeConfig = toml::from_str(toml_src).expect("must parse");
+        assert_eq!(c.allowed_entity_types, vec!["product", "model"]);
+        assert_eq!(c.allowed_relations, vec!["launched", "builds_on"]);
+        assert!(c.requires_date("product"));
+        assert!(c.validate_entity_type("model").is_ok());
+        assert!(c.validate_entity_type("company").is_err());
+    }
+
+    #[test]
+    fn absent_knowledge_section_defaults_to_no_validation() {
+        // A config.toml with no [knowledge] block must not start rejecting.
+        let c: KnowledgeConfig = toml::from_str("").expect("empty must parse");
+        assert!(c.allowed_entity_types.is_empty());
+        assert!(c.validate_entity_type("whatever").is_ok());
     }
 }
 
