@@ -161,6 +161,14 @@ const MODEL_NOT_FOUND_PATTERNS: &[&str] = &[
     "no such model",
     "invalid model",
     "is not found",
+    // Retired models. Providers announce these as end-of-life rather than
+    // "not found", but the operational meaning is identical: this model is
+    // gone and the fallback chain should take over.
+    "no longer available",
+    "end of life",
+    "end-of-life",
+    "has been retired",
+    "has been deprecated",
 ];
 
 /// Format / bad-request patterns (catch-all for 400-class issues).
@@ -296,6 +304,10 @@ pub fn classify_error(message: &str, status: Option<u16>) -> ClassifiedError {
                 }
             }
             404 => return build(LlmErrorCategory::ModelNotFound),
+            // 410 Gone is how providers report a model they have retired.
+            // Treat it like 404 so the fallback chain engages instead of the
+            // agent hard-failing every turn until someone edits config.
+            410 => return build(LlmErrorCategory::ModelNotFound),
             _ => {}
         }
     }
@@ -773,6 +785,41 @@ mod tests {
 
         let e = classify_error("Unknown model: claude-99", None);
         assert_eq!(e.category, LlmErrorCategory::ModelNotFound);
+    }
+
+    /// A retired model must classify as ModelNotFound so the fallback chain
+    /// engages. This is the real NVIDIA body observed when
+    /// `stepfun-ai/step-3.5-flash` reached end of life: it arrives as 410
+    /// with wording no "not found" pattern matched, so the agent hard-failed
+    /// every turn instead of falling back.
+    #[test]
+    fn test_classify_retired_model_as_model_not_found() {
+        let nvidia_eol = "The model 'stepfun-ai/step-3.5-flash' has reached its \
+                          end of life on 2026-07-27T00:00:00Z and is no longer available.";
+
+        // By status alone (410 Gone), regardless of body wording.
+        let e = classify_error(nvidia_eol, Some(410));
+        assert_eq!(e.category, LlmErrorCategory::ModelNotFound);
+
+        // And by body alone, for providers that use a different status.
+        let e = classify_error(nvidia_eol, None);
+        assert_eq!(e.category, LlmErrorCategory::ModelNotFound);
+
+        for body in [
+            "this model is no longer available",
+            "model reached end-of-life",
+            "that deployment has been retired",
+            "this model has been deprecated",
+        ] {
+            assert_eq!(
+                classify_error(body, None).category,
+                LlmErrorCategory::ModelNotFound,
+                "retired-model body should route to the fallback chain: {body}"
+            );
+        }
+
+        // Retirement is permanent — retrying the same model cannot help.
+        assert!(!classify_error(nvidia_eol, Some(410)).is_retryable);
     }
 
     #[test]
