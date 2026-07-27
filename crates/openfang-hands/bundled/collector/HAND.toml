@@ -84,6 +84,10 @@ value = "technology"
 label = "Technology Monitoring"
 
 [[settings.options]]
+value = "early_stage"
+label = "Early-Stage / Underground"
+
+[[settings.options]]
 value = "general"
 label = "General Intelligence"
 
@@ -211,7 +215,23 @@ Build targeted search queries based on focus_area:
 **Technology Monitoring**: "[target] release", "[target] benchmark", "[target] adoption", "[target] alternative"
 **General**: "[target] news", "[target] latest", "[target] analysis", "[target] report"
 
-Add temporal queries: "[target] this week", "[target] 2025"
+**Early-Stage / Underground**: the goal is what a SMALL TEAM just shipped, before
+it is widely known. Search the places early work surfaces, not the press cycle:
+
+  * accelerator + batch cohorts — "YC [batch] [target]", "a16z speedrun [target]",
+    "Neo accelerator [target]", "Entrepreneur First [target]", "AI Grant [target]",
+    "Techstars [target]"
+  * funding at the small end — "[target] pre-seed", "[target] seed round",
+    "[target] stealth startup", "[target] emerges from stealth"
+  * university + research spinouts — "[target] spinout", "[target] lab spinoff"
+  * builders shipping in the open — "[target] Show HN", "[target] Product Hunt",
+    "[target] open source release", "[target] launched on GitHub", "[target] demo"
+
+Prefer sources close to the builder — launch posts, repo READMEs, changelogs,
+personal blogs, Show HN threads — over secondhand coverage.
+
+Add temporal queries using the ACTUAL current year from the Current Date given to
+you — e.g. "[target] this week", "[target] <current_year>". Never hardcode a year.
 
 ---
 
@@ -238,6 +258,22 @@ Apply source quality heuristics:
 ## Phase 4 — Knowledge Graph Construction
 
 FOCUS — THE UNIT OF OBSERVATION IS THE THING SHIPPED.
+
+When focus_area is `early_stage`, apply this filter BEFORE recording anything:
+
+  * PREFER the small and the new — seed/pre-seed and accelerator-batch companies,
+    university spinouts, solo builders and indie hackers, freshly published open
+    source projects. If you have not heard of the maker, that is a point in its
+    favour, not against it.
+  * SKIP the incumbents. Do NOT record an artifact whose maker is a large
+    established player (for example NVIDIA, OpenAI, Google, Microsoft, Meta,
+    Amazon, Apple, Tesla) — their launches are already covered everywhere and
+    crowd out the signal you are here for.
+  * ONE EXCEPTION: record an incumbent's move when it changes what a small team
+    can now build on — a new open model or weights release, an API or SDK opening
+    up, a licence change, a price cut, a capability handed to the public. Record
+    it as the enabling artifact and say in properties what it unlocks. An
+    incumbent product launch that a small team cannot build on is NOT in scope.
 
 Record what actually LAUNCHED: products, models, framework/major releases,
 demonstrated capabilities. Announcements are talk; launches are revealed
