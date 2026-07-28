@@ -1158,8 +1158,10 @@ mod tests {
         assert_eq!(s, "a    b");
         // A `$` and `(` separated only by a quoted region must not form `$(`.
         assert!(contains_shell_metacharacters(r#"echo $"x"(y)"#).is_none());
-        // Unterminated quote swallows the rest, conservatively.
-        assert_eq!(strip_quoted_regions(r#"a"bc"#), "a    ");
+        // Unterminated quote swallows the rest, conservatively. One output
+        // char per input char, so `a"bc` (4) blanks to `a` + 3 spaces.
+        assert_eq!(strip_quoted_regions(r#"a"bc"#), "a   ");
+        assert_eq!(strip_quoted_regions(r#"a"bc"#).len(), r#"a"bc"#.len());
     }
 
     #[test]
