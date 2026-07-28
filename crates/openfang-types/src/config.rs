@@ -1791,8 +1791,7 @@ impl KnowledgeConfig {
     /// permitted. The error text names the permitted values so the model can
     /// self-correct on retry rather than silently writing a junk label.
     pub fn validate_entity_type(&self, ty: &str) -> Result<(), String> {
-        if self.allowed_entity_types.is_empty()
-            || self.allowed_entity_types.iter().any(|a| a == ty)
+        if self.allowed_entity_types.is_empty() || self.allowed_entity_types.iter().any(|a| a == ty)
         {
             return Ok(());
         }
@@ -4095,7 +4094,10 @@ mod knowledge_vocab_tests {
         // The model self-corrects from this text, so it must name the options.
         let c = cfg();
         let err = c.validate_relation("unveiled_at").unwrap_err();
-        assert!(err.contains("unveiled_at"), "names the offending label: {err}");
+        assert!(
+            err.contains("unveiled_at"),
+            "names the offending label: {err}"
+        );
         assert!(err.contains("launched"), "lists valid options: {err}");
         assert!(err.contains("belongs_to"), "lists valid options: {err}");
 
@@ -4109,7 +4111,10 @@ mod knowledge_vocab_tests {
         // Near-misses must fail — that is the whole point.
         let c = cfg();
         assert!(c.validate_entity_type("Product").is_err(), "case matters");
-        assert!(c.validate_entity_type("products").is_err(), "plural is a variant");
+        assert!(
+            c.validate_entity_type("products").is_err(),
+            "plural is a variant"
+        );
         assert!(c.validate_relation("launch").is_err(), "stem is a variant");
     }
 

