@@ -6,6 +6,15 @@
 # lexical-core: unmaintained, pulled by tauri dep chain
 # serde_cbor: unmaintained, pulled by tao (tauri)
 # cocoa/cocoa-foundation: unmaintained, pulled by tauri/tao
+#
+# quick-xml 0.37/0.38: both advisories want >=0.41.0, a semver-major move that
+#   cargo update will not make, and the version is not ours to pick:
+#       quick-xml 0.38.4 <- plist 1.8.0                    (Apple targets)
+#       quick-xml 0.37.5 <- tauri-winrt-notification 0.7.2 (Windows)
+#   Both are denial-of-service shaped and require feeding attacker-controlled
+#   XML to the parser. The only paths that reach it are plist parsing of our
+#   own bundle metadata and Windows toast notifications — no daemon path parses
+#   untrusted XML. Revisit when plist and tauri-winrt-notification bump.
 
 [advisories]
 ignore = [
@@ -31,4 +40,6 @@ ignore = [
     "RUSTSEC-2025-0100",  # gio-sys unmaintained
     "RUSTSEC-2026-0002",  # serde_cbor unmaintained
     "RUSTSEC-2023-0086",  # lexopt unmaintained (if present)
+    "RUSTSEC-2026-0194",  # quick-xml quadratic attribute scan — via plist / tauri-winrt-notification
+    "RUSTSEC-2026-0195",  # quick-xml unbounded namespace alloc — via plist / tauri-winrt-notification
 ]
