@@ -1,0 +1,406 @@
+---
+# FalkorDB sync + report delivery for the OpenFang collector agents.
+#
+# One CronJob owns BOTH steps, in order: it syncs the SQLite knowledge graph
+# into FalkorDB and only then delivers any new collector report to Telegram.
+# That ordering is the point — a report must never announce artifacts that are
+# not yet queryable in the graph. OpenFang's own cron delivery cannot guarantee
+# it (delivery fires when the agent turn ends, independent of the sync), so the
+# schedule's `delivery_targets` is left EMPTY and delivery is owned here.
+# Setting a Telegram target on the schedule as well would double-send.
+#
+# The openfang PVC is ReadWriteOnce, so a sidecar-free job cannot mount it.
+# Instead this execs into the running openfang pod, which already has the DB on
+# local disk, a stdlib python3 with sqlite3, and network reach to falkordb.
+#
+# Requires a secret this manifest deliberately does not contain:
+#
+#   kubectl create secret generic falkordb-auth -n openfang \
+#     --from-literal=password="$FALKORDB_PASSWORD" \
+#     --from-literal=telegram-token="$TELEGRAM_BOT_TOKEN" \
+#     --from-literal=telegram-chat="$TELEGRAM_CHAT_ID"
+#
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: falkor-sync
+  namespace: openfang
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: falkor-sync
+  namespace: openfang
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: falkor-sync
+  namespace: openfang
+subjects:
+  - kind: ServiceAccount
+    name: falkor-sync
+    namespace: openfang
+roleRef:
+  kind: Role
+  name: falkor-sync
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falkor-sync-script
+  namespace: openfang
+data:
+  sync.py: |
+    #!/usr/bin/env python3
+    """Sync OpenFang's SQLite knowledge graph into FalkorDB.
+
+    Runs INSIDE the openfang pod: reads the SQLite file directly off the PVC and
+    speaks RESP to the falkordb service over the cluster network. No pip deps —
+    stdlib sqlite3 + socket only.
+
+    Incumbent makers are filtered out here as well as in the collector prompt, so
+    that a prompt regression cannot quietly repopulate the graph with the big-tech
+    launches the collector is meant to ignore.
+    """
+    import json
+    import os
+    import socket
+    import sqlite3
+    import sys
+
+    DB = os.environ.get("OPENFANG_DB", "/data/data/openfang.db")
+    HOST = os.environ.get("FALKOR_HOST", "falkordb.falkordb.svc.cluster.local")
+    PORT = int(os.environ.get("FALKOR_PORT", "6379"))
+    PW = os.environ.get("FALKORDB_PASSWORD", "")
+    GRAPH = os.environ.get("FALKOR_GRAPH", "openfang")
+
+    # Names whose artifacts we deliberately do not track. Matched case-insensitively
+    # as substrings, so "NVIDIA Isaac Sim" and "Tesla Cybertruck ..." both match.
+    INCUMBENTS = [
+        "nvidia", "openai", "google", "deepmind", "microsoft", "amazon", "apple",
+        "tesla", "figure ai", "boston dynamics", "alphabet", "anthropic", "intel",
+        "qualcomm", "samsung", "sony", "huawei", "baidu", "alibaba", "tencent",
+        "xiaomi", "meta platforms",
+    ]
+
+
+    def is_incumbent(name):
+        low = (name or "").lower()
+        return any(g in low for g in INCUMBENTS)
+
+
+    class Resp:
+        """Minimal RESP client — just enough for AUTH and GRAPH.QUERY."""
+
+        def __init__(self, host, port, password):
+            self.sock = socket.create_connection((host, port), timeout=30)
+            self.f = self.sock.makefile("rb")
+            if password:
+                self.cmd("AUTH", password)
+
+        def cmd(self, *args):
+            out = [f"*{len(args)}\r\n".encode()]
+            for a in args:
+                b = a.encode() if isinstance(a, str) else a
+                out.append(b"$%d\r\n%s\r\n" % (len(b), b))
+            self.sock.sendall(b"".join(out))
+            return self._read()
+
+        def _read(self):
+            line = self.f.readline()
+            if not line:
+                raise IOError("connection closed")
+            tag, body = line[:1], line[1:].strip()
+            if tag == b"+":
+                return body.decode()
+            if tag == b"-":
+                raise RuntimeError(body.decode())
+            if tag == b":":
+                return int(body)
+            if tag == b"$":
+                n = int(body)
+                if n == -1:
+                    return None
+                data = self.f.read(n + 2)[:-2]
+                return data.decode(errors="replace")
+            if tag == b"*":
+                n = int(body)
+                if n == -1:
+                    return None
+                return [self._read() for _ in range(n)]
+            raise RuntimeError(f"bad RESP tag {tag!r}")
+
+        def query(self, cypher):
+            return self.cmd("GRAPH.QUERY", GRAPH, cypher)
+
+
+    def esc(v):
+        if v is None:
+            return "''"
+        return "'" + str(v).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+    def label_for(etype):
+        lab = "".join(c for c in (etype or "Entity").title().replace("_", "")
+                      if c.isalnum())
+        return lab or "Entity"
+
+
+    DATE_KEYS = ("date", "release_date", "launch_date", "published_date",
+                 "announced_date", "created_date")
+
+
+    def main():
+        con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        r = Resp(HOST, PORT, PW)
+
+        ents = list(con.execute(
+            "SELECT id, name, entity_type, properties FROM entities"))
+        kept, skipped, nodes = set(), 0, 0
+
+        for eid, name, etype, props in ents:
+            if is_incumbent(name):
+                skipped += 1
+                continue
+            try:
+                p = json.loads(props) if props else {}
+            except Exception:
+                p = {}
+            if not isinstance(p, dict):
+                p = {}
+            date = next((p[k] for k in DATE_KEYS if p.get(k)), "")
+            r.query(
+                f"MERGE (n:{label_for(etype)} {{id:{esc(eid)}}}) "
+                f"SET n.name={esc(name)}, n.type={esc(etype)}, n.date={esc(date)}, "
+                f"n.description={esc(str(p.get('description', ''))[:400])}"
+            )
+            kept.add(eid)
+            kept.add(name)
+            nodes += 1
+
+        # id-OR-name join: the agent writes relations by whichever it has to hand.
+        rels = list(con.execute(
+            """SELECT r.source_entity, r.relation_type, r.target_entity
+               FROM relations r
+               JOIN entities s ON (r.source_entity = s.id OR r.source_entity = s.name)
+               JOIN entities t ON (r.target_entity = t.id OR r.target_entity = t.name)"""
+        ))
+
+        edges, dropped = 0, 0
+        for src, rtype, tgt in rels:
+            if src not in kept or tgt not in kept:
+                dropped += 1          # endpoint was filtered out as an incumbent
+                continue
+            rt = "".join(c for c in (rtype or "RELATED_TO").upper()
+                         if c.isalnum() or c == "_") or "RELATED_TO"
+            try:
+                r.query(
+                    f"MATCH (a), (b) WHERE (a.id={esc(src)} OR a.name={esc(src)}) "
+                    f"AND (b.id={esc(tgt)} OR b.name={esc(tgt)}) "
+                    f"MERGE (a)-[:{rt}]->(b)"
+                )
+                edges += 1
+            except Exception as e:
+                print(f"edge failed {src} -{rt}-> {tgt}: {str(e)[:100]}",
+                      file=sys.stderr)
+
+        total = r.query("MATCH (n) RETURN count(n)")
+        print(f"sync ok: nodes={nodes} edges={edges} "
+              f"incumbents_skipped={skipped} edges_dropped={dropped}")
+        print(f"graph now: {total}")
+
+
+    # ---------------------------------------------------------------------------
+    # Delivery
+    #
+    # Runs only AFTER the sync above has returned. That ordering is the whole point:
+    # the Telegram report must never arrive describing artifacts that are not yet
+    # queryable in the graph. OpenFang's own cron delivery cannot guarantee this —
+    # it fires when the agent turn ends, independently of the sync — so the
+    # schedule's delivery_targets are left empty and delivery is owned here.
+    # ---------------------------------------------------------------------------
+
+    WORKSPACES = os.environ.get("WORKSPACES_DIR", "/data/workspaces")
+    TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
+    TG_LIMIT = 4000          # Telegram hard-caps a message at 4096 chars
+
+    # Every collector instance gets its own workspace, so scan them all rather than
+    # hardcoding one. Each keeps its own marker, so a quiet beat is never starved by
+    # a busy one and two beats cannot clobber each other's delivery state.
+
+
+    def newest_report(workspace):
+        out = os.path.join(WORKSPACES, workspace, "output")
+        try:
+            files = [f for f in os.listdir(out)
+                     if f.startswith("collector_report_") and f.endswith(".md")]
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+        if not files:
+            return None
+        newest = max(files, key=lambda f: os.path.getmtime(os.path.join(out, f)))
+        return os.path.join(out, newest)
+
+
+    def marker_path(workspace):
+        return os.path.join(WORKSPACES, workspace, ".last_delivered")
+
+
+    def already_delivered(workspace, path):
+        """True when this exact report version has been sent before.
+
+        Keyed on path+mtime so a rewritten report for the same day is treated as
+        new, but a merely re-run sync is not.
+        """
+        stamp = f"{path}:{int(os.path.getmtime(path))}"
+        try:
+            with open(marker_path(workspace)) as fh:
+                return fh.read().strip() == stamp
+        except FileNotFoundError:
+            return False
+
+
+    def mark_delivered(workspace, path):
+        with open(marker_path(workspace), "w") as fh:
+            fh.write(f"{path}:{int(os.path.getmtime(path))}")
+
+
+    def list_workspaces():
+        try:
+            return sorted(w for w in os.listdir(WORKSPACES)
+                          if os.path.isdir(os.path.join(WORKSPACES, w, "output")))
+        except FileNotFoundError:
+            return []
+
+
+    def send_telegram(text):
+        import urllib.parse
+        import urllib.request
+        body = urllib.parse.urlencode({
+            "chat_id": TG_CHAT, "text": text,
+            "disable_web_page_preview": "true",
+        }).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data=body)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode()).get("ok", False)
+
+
+    def deliver():
+        if not (TG_TOKEN and TG_CHAT):
+            print("delivery: skipped (no TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)")
+            return
+
+        workspaces = list_workspaces()
+        if not workspaces:
+            print("delivery: no workspaces found")
+            return
+
+        sent = failed = 0
+        for ws in workspaces:
+            path = newest_report(ws)
+            if not path:
+                continue
+            if already_delivered(ws, path):
+                print(f"delivery[{ws}]: already sent {os.path.basename(path)}")
+                continue
+            with open(path) as fh:
+                text = fh.read()
+            # Prefix with the beat name — with several collectors running, the
+            # report body alone does not say which one produced it.
+            header = f"[{ws}]\n\n"
+            room = TG_LIMIT - len(header)
+            body = header + (text if len(text) <= room
+                             else text[:room] + "\n\n[truncated]")
+            if send_telegram(body):
+                mark_delivered(ws, path)
+                sent += 1
+                print(f"delivery[{ws}]: sent {os.path.basename(path)} "
+                      f"({len(body)} chars)")
+            else:
+                failed += 1
+                print(f"delivery[{ws}]: FAILED {os.path.basename(path)}",
+                      file=sys.stderr)
+
+        print(f"delivery: {sent} sent, {failed} failed, "
+              f"{len(workspaces)} workspace(s) scanned")
+        if failed:
+            sys.exit(1)
+
+
+    if __name__ == "__main__":
+        main()
+        deliver()
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: falkor-sync
+  namespace: openfang
+spec:
+  # Every 5 min: sync runs first, delivery second, in the same job. Delivery is
+  # idempotent — a per-workspace marker keyed on report path + mtime — so a new
+  # report is sent exactly once no matter how often the job runs.
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1500
+      template:
+        spec:
+          serviceAccountName: falkor-sync
+          restartPolicy: OnFailure
+          containers:
+            - name: sync
+              # bitnami/kubectl is no longer published publicly; alpine/k8s
+              # ships kubectl plus a shell and has an arm64 manifest.
+              image: alpine/k8s:1.31.0
+              env:
+                - name: FALKORDB_PASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: falkordb-auth, key: password }
+                - name: TELEGRAM_BOT_TOKEN
+                  valueFrom:
+                    secretKeyRef: { name: falkordb-auth, key: telegram-token }
+                - name: TELEGRAM_CHAT_ID
+                  valueFrom:
+                    secretKeyRef: { name: falkordb-auth, key: telegram-chat }
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  POD=$(kubectl get pods -n openfang \
+                        -l app=openfang \
+                        -o jsonpath='{.items[0].metadata.name}')
+                  echo "syncing via pod $POD"
+                  kubectl exec -i -n openfang "$POD" -- \
+                    env FALKORDB_PASSWORD="$FALKORDB_PASSWORD" \
+                        TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
+                        TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID" \
+                    python3 - < /scripts/sync.py
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+              resources:
+                requests: { cpu: 20m, memory: 64Mi }
+                limits: { cpu: 300m, memory: 256Mi }
+          volumes:
+            - name: script
+              configMap:
+                name: falkor-sync-script
