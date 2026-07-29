@@ -22,6 +22,17 @@ const DEFAULT_CHECK_INTERVAL_SECS: u64 = 30;
 /// multiples of its heartbeat interval.
 const UNRESPONSIVE_MULTIPLIER: u64 = 2;
 
+/// Seconds of inactivity before a Running agent is presumed unresponsive.
+///
+/// Must not be shorter than the longest a legitimate turn may take, or live
+/// work gets killed and restarted: an agent still inside its turn budget is
+/// waiting, not hung. `kernel::DEFAULT_AGENT_TURN_TIMEOUT_SECS` is 600, and
+/// per-job `timeout_secs` is bounded by `scheduler::MAX_TIMEOUT_SECS` (3600),
+/// so 600 matches the default turn and the turn timeout remains the mechanism
+/// that ends an over-running turn. This value only decides when to call an
+/// agent *dead*.
+const DEFAULT_UNRESPONSIVE_TIMEOUT_SECS: u64 = 600;
+
 /// Default maximum recovery attempts before giving up.
 const DEFAULT_MAX_RECOVERY_ATTEMPTS: u32 = 3;
 
@@ -61,8 +72,7 @@ impl Default for HeartbeatConfig {
     fn default() -> Self {
         Self {
             check_interval_secs: DEFAULT_CHECK_INTERVAL_SECS,
-            // 180s default: browser tasks and complex LLM calls can take 1-3 minutes
-            default_timeout_secs: 180,
+            default_timeout_secs: DEFAULT_UNRESPONSIVE_TIMEOUT_SECS,
             max_recovery_attempts: DEFAULT_MAX_RECOVERY_ATTEMPTS,
             recovery_cooldown_secs: DEFAULT_RECOVERY_COOLDOWN_SECS,
         }
@@ -157,12 +167,28 @@ pub fn check_agents(registry: &AgentRegistry, config: &HeartbeatConfig) -> Vec<H
 
         let inactive_secs = (now - entry_ref.last_active).num_seconds();
 
-        // Determine timeout: use agent's autonomous config if set, else default
+        // Determine timeout: use agent's autonomous config if set, else default.
+        //
+        // The per-agent value is a FLOOR-RAISER, never a floor-lowerer. Taken
+        // literally it produces a *tighter* bound than the default for exactly
+        // the agents doing the heaviest work: the default heartbeat interval is
+        // 30s, so `30 * 2 = 60s` — well under the 180s the default already
+        // concedes that "browser tasks and complex LLM calls" need, and far
+        // under the 600s a single agent turn is allowed to run for.
+        //
+        // A collector agent waiting on a rate-limited reasoning model was being
+        // declared crashed every 60 seconds and "recovered" — restarting its
+        // loop and discarding the in-flight turn, forever. Waiting on the model
+        // is not being hung. Take the larger of the two bounds so an autonomous
+        // config can only ever grant an agent MORE time, not less.
         let timeout_secs = entry_ref
             .manifest
             .autonomous
             .as_ref()
-            .map(|a| a.heartbeat_interval_secs * UNRESPONSIVE_MULTIPLIER)
+            .map(|a| {
+                (a.heartbeat_interval_secs * UNRESPONSIVE_MULTIPLIER)
+                    .max(config.default_timeout_secs)
+            })
             .unwrap_or(config.default_timeout_secs) as i64;
 
         // --- Skip idle agents that have never genuinely processed a message ---
@@ -382,7 +408,7 @@ mod tests {
         );
         registry.register(idle_agent).unwrap();
 
-        let config = HeartbeatConfig::default(); // timeout = 180s
+        let config = HeartbeatConfig::default();
         let statuses = check_agents(&registry, &config);
 
         // The idle agent should be skipped entirely
@@ -460,17 +486,15 @@ mod tests {
         // An agent that WAS active (last_active >> created_at) but has gone
         // silent for longer than the timeout — should be flagged unresponsive.
         let registry = crate::registry::AgentRegistry::new();
-        let ten_min_ago = Utc::now() - Duration::seconds(600);
-        let five_min_ago = Utc::now() - Duration::seconds(300);
-        let active_agent = make_entry(
-            "active-agent",
-            AgentState::Running,
-            ten_min_ago,
-            five_min_ago,
-        );
+        // Derive the timings from the threshold rather than hardcoding, so
+        // this keeps testing "past the timeout" if the default ever moves.
+        let timeout = DEFAULT_UNRESPONSIVE_TIMEOUT_SECS as i64;
+        let created = Utc::now() - Duration::seconds(timeout * 3);
+        let last_active = Utc::now() - Duration::seconds(timeout + 60);
+        let active_agent = make_entry("active-agent", AgentState::Running, created, last_active);
         registry.register(active_agent).unwrap();
 
-        let config = HeartbeatConfig::default(); // timeout = 180s, inactive = ~300s
+        let config = HeartbeatConfig::default();
         let statuses = check_agents(&registry, &config);
 
         assert_eq!(statuses.len(), 1);
@@ -489,7 +513,7 @@ mod tests {
         let healthy_agent = make_entry("healthy-agent", AgentState::Running, ten_min_ago, just_now);
         registry.register(healthy_agent).unwrap();
 
-        let config = HeartbeatConfig::default(); // timeout = 180s
+        let config = HeartbeatConfig::default();
         let statuses = check_agents(&registry, &config);
 
         assert_eq!(statuses.len(), 1);
@@ -544,7 +568,34 @@ mod tests {
     fn test_heartbeat_config_default() {
         let config = HeartbeatConfig::default();
         assert_eq!(config.check_interval_secs, 30);
-        assert_eq!(config.default_timeout_secs, 180);
+        assert_eq!(
+            config.default_timeout_secs,
+            DEFAULT_UNRESPONSIVE_TIMEOUT_SECS
+        );
+    }
+
+    /// An autonomous config may only grant an agent MORE time before it is
+    /// presumed dead, never less.
+    ///
+    /// Read literally, `heartbeat_interval_secs * UNRESPONSIVE_MULTIPLIER` is
+    /// 60s for the default 30s interval — tighter than the default timeout, so
+    /// an agent waiting on a slow model was declared crashed and had its
+    /// in-flight turn restarted every 60 seconds.
+    #[test]
+    fn test_autonomous_config_never_shortens_timeout() {
+        let config = HeartbeatConfig::default();
+        let effective =
+            |interval: u64| (interval * UNRESPONSIVE_MULTIPLIER).max(config.default_timeout_secs);
+
+        // The default 30s interval must not drag the bound below the default.
+        assert_eq!(effective(30), config.default_timeout_secs);
+        assert!(
+            effective(30) >= config.default_timeout_secs,
+            "a short heartbeat interval must not shorten the death threshold"
+        );
+
+        // A generous interval still raises it.
+        assert_eq!(effective(600), 1200);
     }
 
     #[test]
