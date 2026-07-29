@@ -404,9 +404,18 @@ mod tests {
     #[test]
     fn test_entity_type_from_db_str_reads_all_forms() {
         // Flat (new), quoted scalar (legacy), and object (legacy custom).
-        assert_eq!(EntityType::from_db_str("organization"), EntityType::Organization);
-        assert_eq!(EntityType::from_db_str("\"organization\""), EntityType::Organization);
-        assert_eq!(EntityType::from_db_str("product"), EntityType::Custom("product".to_string()));
+        assert_eq!(
+            EntityType::from_db_str("organization"),
+            EntityType::Organization
+        );
+        assert_eq!(
+            EntityType::from_db_str("\"organization\""),
+            EntityType::Organization
+        );
+        assert_eq!(
+            EntityType::from_db_str("product"),
+            EntityType::Custom("product".to_string())
+        );
         assert_eq!(
             EntityType::from_db_str("{\"custom\":\"product\"}"),
             EntityType::Custom("product".to_string())

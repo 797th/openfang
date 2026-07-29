@@ -232,7 +232,7 @@ data:
     WORKSPACES = os.environ.get("WORKSPACES_DIR", "/data/workspaces")
     TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
-    TG_LIMIT = 4000          # Telegram hard-caps a message at 4096 chars
+    # (TG_LIMIT / BUDGET are defined with the renderer below.)
 
     # Every collector instance gets its own workspace, so scan them all rather than
     # hardcoding one. Each keeps its own marker, so a quiet beat is never starved by
@@ -283,17 +283,128 @@ data:
             return []
 
 
-    def send_telegram(text):
+    # --- Telegram rendering -------------------------------------------------
+    import html
+    import re
+
+    TG_LIMIT = 4096
+    BUDGET = 3900          # leave room for the footer
+
+
+    def hesc(s):
+        """HTML-escape for Telegram. Distinct from the Cypher hesc() above."""
+        return html.escape(s or "", quote=False)
+
+
+    def _bold_to_html(s):
+        """`**x**` -> `<b>x</b>`, on already-escaped text."""
+        return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+
+
+    def _section(text, name):
+        """Return the body of a `## name` section, else ''."""
+        m = re.search(rf"^## {re.escape(name)}.*?$\n(.*?)(?=^## |\Z)",
+                      text, re.M | re.S)
+        return m.group(1).strip() if m else ""
+
+
+    def format_report(text, workspace):
+        out = []
+
+        # ---- headline -------------------------------------------------------
+        title = re.search(r"^#\s+(.+)$", text, re.M)
+        title = title.group(1).strip() if title else f"Report — {workspace}"
+        title = re.sub(r"^Intelligence Report:\s*", "", title)
+
+        meta = dict(re.findall(r"\*\*(\w[\w ]*)\*\*:\s*([^|\n]+)", text))
+        date = (meta.get("Date") or "").strip()
+        cycle = (meta.get("Cycle") or "").strip()
+        srcs = (meta.get("Sources Processed") or "").strip()
+
+        out.append(f"🔍 <b>{hesc(title)}</b>")
+        bits = [b for b in (date, f"cycle {cycle}" if cycle else "",
+                            f"{srcs} sources" if srcs else "") if b]
+        if bits:
+            out.append(f"<i>{hesc(' · '.join(bits))}</i>")
+
+        # ---- artifacts ------------------------------------------------------
+        # Prefer the indented sub-bullets ("  - **Name** (cat, date) — desc"),
+        # which are the artifacts themselves; fall back to top-level bullets.
+        changes = _section(text, "Key Changes")
+        arts = re.findall(r"^\s+-\s+\*\*(.+?)\*\*\s*\(([^)]*)\)\s*[—-]\s*(.+)$",
+                          changes, re.M)
+        if arts:
+            out.append("")
+            out.append("<b>New artifacts</b>")
+            for name, tags, desc in arts:
+                tags = " · ".join(t.strip() for t in tags.split(",") if t.strip())
+                out.append(f"• <b>{hesc(name)}</b> — <i>{hesc(tags)}</i>")
+                out.append(f"   {hesc(desc.strip())}")
+        else:
+            tops = [ln for ln in changes.splitlines() if ln.startswith("- ")]
+            if tops:
+                out.append("")
+                out.append("<b>Key changes</b>")
+                for ln in tops[:6]:
+                    out.append("• " + _bold_to_html(hesc(ln[2:].strip())))
+
+        # ---- summary --------------------------------------------------------
+        summary = _section(text, "Intelligence Summary")
+        if summary:
+            para = summary.split("\n\n")[0].strip()
+            if len(para) > 700:
+                para = para[:700].rsplit(" ", 1)[0] + "…"
+            out.append("")
+            out.append("<b>Summary</b>")
+            out.append(_bold_to_html(hesc(para)))
+
+        # ---- sources --------------------------------------------------------
+        sources = _section(text, "Sources")
+        links = re.findall(r"\[([^\]]+)\]\((https?://[^)]+)\)", sources)
+        if links:
+            out.append("")
+            out.append("<b>Sources</b>")
+            for t, u in links[:5]:
+                t = t.strip()
+                if len(t) > 70:
+                    t = t[:70] + "…"
+                out.append(f'• <a href="{hesc(u)}">{hesc(t)}</a>')
+
+        body = "\n".join(out)
+        if len(body) > BUDGET:
+            body = body[:BUDGET].rsplit("\n", 1)[0] + "\n…"
+        body += f"\n\n<i>{hesc(workspace)}</i>"
+        return body[:TG_LIMIT]
+
+
+    def send_telegram(text, parse_mode="HTML"):
         import urllib.parse
         import urllib.request
-        body = urllib.parse.urlencode({
+        payload = {
             "chat_id": TG_CHAT, "text": text,
             "disable_web_page_preview": "true",
-        }).encode()
+        }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        body = urllib.parse.urlencode(payload).encode()
         req = urllib.request.Request(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data=body)
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode()).get("ok", False)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode()).get("ok", False)
+        except urllib.error.HTTPError as e:
+            # A malformed tag makes Telegram reject the whole message. Losing the
+            # report over formatting would be worse than losing the formatting, so
+            # retry once as plain text.
+            detail = e.read().decode(errors="replace")[:200]
+            print(f"telegram HTML send rejected ({e.code}): {detail}",
+                  file=sys.stderr)
+            if parse_mode:
+                print("retrying as plain text", file=sys.stderr)
+                import re as _re
+                plain = _re.sub(r"<[^>]+>", "", text)
+                return send_telegram(plain, parse_mode=None)
+            return False
 
 
     def deliver():
@@ -316,12 +427,10 @@ data:
                 continue
             with open(path) as fh:
                 text = fh.read()
-            # Prefix with the beat name — with several collectors running, the
-            # report body alone does not say which one produced it.
-            header = f"[{ws}]\n\n"
-            room = TG_LIMIT - len(header)
-            body = header + (text if len(text) <= room
-                             else text[:room] + "\n\n[truncated]")
+            # Render for Telegram rather than dumping raw markdown: `#` headings
+            # and pipe tables do not render there, and a raw dump truncates
+            # mid-table. The beat name is carried in the rendered footer.
+            body = format_report(text, ws)
             if send_telegram(body):
                 mark_delivered(ws, path)
                 sent += 1
