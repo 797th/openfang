@@ -4414,8 +4414,13 @@ impl OpenFangKernel {
         let saved_hands = openfang_hands::registry::HandRegistry::load_state(&state_path);
         if !saved_hands.is_empty() {
             info!("Restoring {} persisted hand(s)", saved_hands.len());
-            for (hand_id, config, old_agent_id) in saved_hands {
-                match self.activate_hand(&hand_id, config, None) {
+            for (hand_id, instance_name, config, old_agent_id) in saved_hands {
+                // Restore under the SAME instance name. Passing None here made
+                // every named instance come back as the unnamed one: a
+                // different agent id, the hand's default agent name, and a
+                // different workspace — so its context.md and accumulated files
+                // were orphaned on every restart.
+                match self.activate_hand(&hand_id, config, instance_name) {
                     Ok(inst) => {
                         info!(hand = %hand_id, instance = %inst.instance_id, "Hand restored");
                         // Reassign cron jobs and triggers from the pre-restart

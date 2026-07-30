@@ -110,6 +110,12 @@ impl HandRegistry {
             .map(|e| {
                 serde_json::json!({
                     "hand_id": e.hand_id,
+                    // Without the name, a named instance is restored as an
+                    // unnamed one: it takes the legacy agent id derived from
+                    // hand_id, is renamed to the hand's default, and lands in a
+                    // different workspace — orphaning the context.md and files
+                    // the original instance had accumulated.
+                    "instance_name": e.instance_name,
                     "config": e.config,
                     "agent_id": e.agent_id,
                 })
@@ -123,12 +129,24 @@ impl HandRegistry {
     }
 
     /// Load persisted hand state and re-activate hands.
-    /// Returns list of (hand_id, config, old_agent_id) that should be activated.
-    /// The `old_agent_id` is the agent UUID from before the restart, used to
+    ///
+    /// Returns `(hand_id, instance_name, config, old_agent_id)` for each hand
+    /// that should be activated. `instance_name` must be carried through:
+    /// activating without it derives a different agent id and a different agent
+    /// name, so a named instance would not survive a restart. It is optional in
+    /// the file so state written before this field existed still loads.
+    ///
+    /// `old_agent_id` is the agent UUID from before the restart, used to
     /// reassign cron jobs to the newly spawned agent (issue #402).
+    #[allow(clippy::type_complexity)]
     pub fn load_state(
         path: &std::path::Path,
-    ) -> Vec<(String, HashMap<String, serde_json::Value>, Option<AgentId>)> {
+    ) -> Vec<(
+        String,
+        Option<String>,
+        HashMap<String, serde_json::Value>,
+        Option<AgentId>,
+    )> {
         let data = match std::fs::read_to_string(path) {
             Ok(d) => d,
             Err(_) => return Vec::new(),
@@ -144,12 +162,16 @@ impl HandRegistry {
             .into_iter()
             .filter_map(|e| {
                 let hand_id = e["hand_id"].as_str()?.to_string();
+                let instance_name = e
+                    .get("instance_name")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
                 let config: HashMap<String, serde_json::Value> =
                     serde_json::from_value(e["config"].clone()).unwrap_or_default();
                 let old_agent_id: Option<AgentId> = e
                     .get("agent_id")
                     .and_then(|v| serde_json::from_value(v.clone()).ok());
-                Some((hand_id, config, old_agent_id))
+                Some((hand_id, instance_name, config, old_agent_id))
             })
             .collect()
     }
@@ -1355,11 +1377,61 @@ system_prompt = "v2 — schedule changed."
         reg.persist_state(&state_file).unwrap();
         let reloaded = HandRegistry::load_state(&state_file);
         assert_eq!(reloaded.len(), 1);
-        let (hand_id, config, _agent_id) = &reloaded[0];
+        let (hand_id, _instance_name, config, _agent_id) = &reloaded[0];
         assert_eq!(hand_id, "browser");
         assert_eq!(
             config.get("headless"),
             Some(&serde_json::Value::String("true".into()))
+        );
+    }
+
+    /// A named instance must come back named.
+    ///
+    /// The name decides the agent id (`hand_instance_<uuid>` vs the legacy
+    /// id derived from `hand_id`), the agent name, and therefore the workspace
+    /// directory. Dropping it on restore silently re-homed the instance and
+    /// orphaned everything it had accumulated there.
+    #[test]
+    fn test_instance_name_survives_persist_reload() {
+        let reg = test_registry_with_dummy_hand("collector");
+        let inst = reg
+            .activate("collector", HashMap::new(), Some("underground".into()))
+            .unwrap();
+        assert_eq!(inst.instance_name.as_deref(), Some("underground"));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state_file = tmp.path().join("hands.json");
+        reg.persist_state(&state_file).unwrap();
+
+        let reloaded = HandRegistry::load_state(&state_file);
+        assert_eq!(reloaded.len(), 1);
+        let (hand_id, instance_name, _config, _agent_id) = &reloaded[0];
+        assert_eq!(hand_id, "collector");
+        assert_eq!(
+            instance_name.as_deref(),
+            Some("underground"),
+            "named instance must be restored under the same name"
+        );
+    }
+
+    /// State written before `instance_name` existed must still load.
+    #[test]
+    fn test_load_state_without_instance_name_is_unnamed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state_file = tmp.path().join("hands.json");
+        std::fs::write(
+            &state_file,
+            r#"[{"hand_id":"collector","config":{},"agent_id":null}]"#,
+        )
+        .unwrap();
+
+        let reloaded = HandRegistry::load_state(&state_file);
+        assert_eq!(reloaded.len(), 1);
+        let (hand_id, instance_name, _config, _agent_id) = &reloaded[0];
+        assert_eq!(hand_id, "collector");
+        assert!(
+            instance_name.is_none(),
+            "legacy state has no name and must load as unnamed"
         );
     }
 }
