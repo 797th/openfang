@@ -308,6 +308,28 @@ data:
         return m.group(1).strip() if m else ""
 
 
+    def has_new_artifacts(text):
+        """True when this report actually names something new.
+
+        The renderer pulls artifacts from the indented sub-bullets of Key Changes.
+        If that yields nothing, check the top-level bullets for an explicit
+        no-change statement before deciding the cycle was empty — a report can
+        carry a real finding as a single top-level bullet.
+        """
+        changes = _section(text, "Key Changes")
+        if re.search(r"^\s+-\s+\*\*(.+?)\*\*\s*\(", changes, re.M):
+            return True
+        bullets = [ln[2:].strip() for ln in changes.splitlines()
+                   if ln.startswith("- ")]
+        if not bullets:
+            return False
+        empty = re.compile(
+            r"no (new|critical|significant)\b|nothing new|no artifacts|"
+            r"no changes|not detected|none detected", re.I)
+        # New if at least one bullet is not just a "nothing happened" note.
+        return any(not empty.search(b) for b in bullets)
+
+
     def format_report(text, workspace):
         out = []
 
@@ -427,6 +449,15 @@ data:
                 continue
             with open(path) as fh:
                 text = fh.read()
+            # A frequent sweep often turns up nothing — the collector says so
+            # rather than inventing artifacts. Sending "no new artifacts" every
+            # cycle would train the reader to ignore the channel, so mark it
+            # delivered (the graph is already synced above) and stay quiet.
+            if not has_new_artifacts(text):
+                mark_delivered(ws, path)
+                print(f"delivery[{ws}]: nothing new in "
+                      f"{os.path.basename(path)}, not sending")
+                continue
             # Render for Telegram rather than dumping raw markdown: `#` headings
             # and pipe tables do not render there, and a raw dump truncates
             # mid-table. The beat name is carried in the rendered footer.

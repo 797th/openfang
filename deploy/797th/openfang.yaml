@@ -63,11 +63,37 @@ data:
     default_agent = "openfang-company"
     poll_interval_secs = 1
 
+    # NOTE: providers retire models without warning. `stepfun-ai/step-3.5-flash`
+    # was pinned here and began returning 410 Gone on 2026-07-27, which took
+    # down every agent at once because this is the GLOBAL default. Before
+    # re-applying this manifest, confirm the pinned model still answers.
     [default_model]
     api_key_env = "NVIDIA_API_KEY"
     base_url = "https://integrate.api.nvidia.com/v1"
-    model = "stepfun-ai/step-3.5-flash"
+    model = "thinkingmachines/inkling"
     provider = "nvidia"
+
+    # Controlled vocabulary for the knowledge graph. The kernel REJECTS any
+    # entity_type or relation outside these lists, which is what keeps a
+    # multi-agent graph queryable instead of accumulating one-off labels.
+    # Dropping this block silently degrades every collector's output quality.
+    [knowledge]
+    allowed_entity_types = [
+      "product", "model", "technology", "category", "use_case",
+      "organization", "research", "funding_round", "event", "metric", "person",
+    ]
+    allowed_relations = [
+      "launched", "develops", "belongs_to", "builds_on", "uses", "targets",
+      "produces", "acquired", "partners_with", "competes_with",
+      "funded_by", "invested_in", "owned_by", "part_of", "related_to",
+    ]
+
+    # Must stay ABOVE the kernel's 600s agent-turn timeout. The built-in default
+    # is 180s, which declares an agent waiting on a slow or rate-limited model
+    # "crashed" and restarts its loop, discarding the in-flight turn — so the
+    # heaviest agents never finish one. See PR #18.
+    [heartbeat]
+    default_timeout_secs = 900
 
     [memory]
     decay_rate = 0.05
