@@ -3860,11 +3860,9 @@ impl OpenFangKernel {
             // pointed at the same agent, doing the same work twice.
             schedule: match hand_tick_interval_secs(&instance.config, def.agent.check_interval_secs)
             {
-                Some(secs) if def.agent.max_iterations.is_some() => {
-                    ScheduleMode::Continuous {
-                        check_interval_secs: secs,
-                    }
-                }
+                Some(secs) if def.agent.max_iterations.is_some() => ScheduleMode::Continuous {
+                    check_interval_secs: secs,
+                },
                 _ => ScheduleMode::default(),
             },
             skills: def.skills.clone(),
@@ -8091,7 +8089,10 @@ mod tests {
     #[test]
     fn test_hand_tick_uses_configured_update_frequency() {
         assert_eq!(hand_tick_interval_secs(&cfg("hourly"), None), Some(3_600));
-        assert_eq!(hand_tick_interval_secs(&cfg("every_6h"), None), Some(21_600));
+        assert_eq!(
+            hand_tick_interval_secs(&cfg("every_6h"), None),
+            Some(21_600)
+        );
         assert_eq!(hand_tick_interval_secs(&cfg("daily"), None), Some(86_400));
         assert_eq!(hand_tick_interval_secs(&cfg("weekly"), None), Some(604_800));
     }
