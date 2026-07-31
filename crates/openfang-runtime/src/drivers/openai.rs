@@ -34,6 +34,14 @@ impl OpenAIDriver {
             base_url,
             client: reqwest::Client::builder()
                 .user_agent(crate::USER_AGENT)
+                // reqwest applies no timeout by default: without these a provider
+                // that accepts the connection and never answers hangs the agent
+                // forever, and because a hang never returns Err the fallback chain
+                // can never fire. See crate::LLM_READ_TIMEOUT_SECS.
+                .connect_timeout(std::time::Duration::from_secs(
+                    crate::LLM_CONNECT_TIMEOUT_SECS,
+                ))
+                .read_timeout(std::time::Duration::from_secs(crate::LLM_READ_TIMEOUT_SECS))
                 .build()
                 .unwrap_or_default(),
             extra_headers: Vec::new(),
@@ -52,6 +60,14 @@ impl OpenAIDriver {
             base_url,
             client: reqwest::Client::builder()
                 .user_agent(crate::USER_AGENT)
+                // reqwest applies no timeout by default: without these a provider
+                // that accepts the connection and never answers hangs the agent
+                // forever, and because a hang never returns Err the fallback chain
+                // can never fire. See crate::LLM_READ_TIMEOUT_SECS.
+                .connect_timeout(std::time::Duration::from_secs(
+                    crate::LLM_CONNECT_TIMEOUT_SECS,
+                ))
+                .read_timeout(std::time::Duration::from_secs(crate::LLM_READ_TIMEOUT_SECS))
                 .build()
                 .unwrap_or_default(),
             extra_headers: Vec::new(),
