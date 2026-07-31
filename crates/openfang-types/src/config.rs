@@ -1332,13 +1332,25 @@ pub struct KernelConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatSettings {
     /// Seconds of inactivity before a reactive agent is marked as unresponsive.
-    /// Default: 180. Set higher to prevent idle hands from being marked as crashed.
+    /// Default: 900. Set higher to prevent idle hands from being marked as crashed.
     #[serde(default = "default_heartbeat_timeout")]
     pub default_timeout_secs: u64,
 }
 
+/// Must stay ABOVE `kernel::DEFAULT_AGENT_TURN_TIMEOUT_SECS` (600).
+///
+/// This value is the one production actually uses: the kernel builds its
+/// `HeartbeatConfig` by overriding the struct default with
+/// `config.heartbeat.default_timeout_secs`, so whatever is set here wins over
+/// `heartbeat::DEFAULT_UNRESPONSIVE_TIMEOUT_SECS`.
+///
+/// At the previous 180s an agent waiting on a slow or rate-limited model was
+/// declared crashed roughly three times before its turn was even allowed to
+/// finish — each "recovery" restarted the loop and discarded the in-flight
+/// turn, so the heaviest agents could never complete one. Waiting on the model
+/// is not being hung; only exceeding the turn timeout is.
 fn default_heartbeat_timeout() -> u64 {
-    180
+    900
 }
 
 impl Default for HeartbeatSettings {
@@ -4855,7 +4867,21 @@ mod tests {
     #[test]
     fn test_heartbeat_settings_default() {
         let settings = HeartbeatSettings::default();
-        assert_eq!(settings.default_timeout_secs, 180);
+        assert_eq!(settings.default_timeout_secs, 900);
+    }
+
+    /// The kernel lets a single turn run for 600s before timing it out. If the
+    /// heartbeat declares an agent unresponsive sooner than that, it kills
+    /// turns that are still legitimately running — which is exactly what a
+    /// default of 180 did to agents waiting on a slow model.
+    #[test]
+    fn test_heartbeat_default_exceeds_agent_turn_timeout() {
+        const AGENT_TURN_TIMEOUT_SECS: u64 = 600;
+        assert!(
+            HeartbeatSettings::default().default_timeout_secs > AGENT_TURN_TIMEOUT_SECS,
+            "heartbeat timeout must outlast a full agent turn, else a working \
+             agent is recovered mid-turn and its work discarded"
+        );
     }
 
     #[test]
@@ -4872,7 +4898,7 @@ mod tests {
             log_level = "debug"
         "#;
         let config: KernelConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.heartbeat.default_timeout_secs, 180);
+        assert_eq!(config.heartbeat.default_timeout_secs, 900);
     }
 
     #[test]
