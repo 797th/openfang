@@ -3852,13 +3852,20 @@ impl OpenFangKernel {
             }),
             // Autonomous hands must run in Continuous mode so the background loop picks them up.
             // Reactive (default) only fires on incoming messages, so autonomous hands would be inert.
-            // Use HAND.toml check_interval_secs if set, otherwise default to 3600s (1 hour).
-            schedule: if def.agent.max_iterations.is_some() {
-                ScheduleMode::Continuous {
-                    check_interval_secs: def.agent.check_interval_secs.unwrap_or(3600),
+            //
+            // The interval comes from the instance's own `update_frequency` setting when the
+            // hand declares one, so the value the user picked in the UI is the value that runs.
+            // Before this, it was ignored: every hand ticked hourly regardless, so an instance
+            // configured `every_6h` still woke up 24 times a day — on top of any cron schedule
+            // pointed at the same agent, doing the same work twice.
+            schedule: match hand_tick_interval_secs(&instance.config, def.agent.check_interval_secs)
+            {
+                Some(secs) if def.agent.max_iterations.is_some() => {
+                    ScheduleMode::Continuous {
+                        check_interval_secs: secs,
+                    }
                 }
-            } else {
-                ScheduleMode::default()
+                _ => ScheduleMode::default(),
             },
             skills: def.skills.clone(),
             mcp_servers: def.mcp_servers.clone(),
@@ -7181,6 +7188,47 @@ impl openfang_channels::bridge::ChannelBridgeHandle for KernelCronBridge {
 /// `MAX_TIMEOUT_SECS` (1 hour).
 const DEFAULT_AGENT_TURN_TIMEOUT_SECS: u64 = 600;
 
+/// Fallback autonomous tick interval when nothing else specifies one, in seconds.
+const DEFAULT_HAND_TICK_SECS: u64 = 3600;
+
+/// How often an activated hand's autonomous loop should self-prompt, in seconds.
+///
+/// Resolution order:
+///
+/// 1. the instance's own `update_frequency` setting, so the value picked in the
+///    UI is the value that actually runs,
+/// 2. the hand's declared `check_interval_secs`,
+/// 3. [`DEFAULT_HAND_TICK_SECS`].
+///
+/// `None` means the hand should not tick at all — the agent stays Reactive and
+/// runs only when messaged or when a cron schedule fires. That is what
+/// `update_frequency = "manual"` selects, and it is the right setting for a
+/// collector already driven by its own schedule: without it the hand does the
+/// same sweep twice, once on the tick and once on the cron.
+///
+/// An unrecognised `update_frequency` falls through to the hand default rather
+/// than erroring — a typo in a settings option should not leave an autonomous
+/// hand silently inert.
+fn hand_tick_interval_secs(
+    config: &std::collections::HashMap<String, serde_json::Value>,
+    hand_declared: Option<u64>,
+) -> Option<u64> {
+    let declared = || hand_declared.or(Some(DEFAULT_HAND_TICK_SECS));
+
+    let Some(freq) = config.get("update_frequency").and_then(|v| v.as_str()) else {
+        return declared();
+    };
+
+    match freq.trim().to_ascii_lowercase().as_str() {
+        "manual" | "off" | "never" | "none" => None,
+        "hourly" => Some(3_600),
+        "every_6h" => Some(21_600),
+        "daily" => Some(86_400),
+        "weekly" => Some(604_800),
+        _ => declared(),
+    }
+}
+
 /// Fan out `output` to every target in `delivery_targets` concurrently.
 ///
 /// Never returns an error — delivery is best-effort because the job itself
@@ -8031,6 +8079,70 @@ mod tests {
     use super::*;
     use openfang_types::config::ExecPolicy;
     use std::collections::HashMap;
+
+    fn cfg(freq: &str) -> HashMap<String, serde_json::Value> {
+        HashMap::from([(
+            "update_frequency".to_string(),
+            serde_json::Value::String(freq.to_string()),
+        )])
+    }
+
+    /// The whole point of the setting: what the user picks is what runs.
+    #[test]
+    fn test_hand_tick_uses_configured_update_frequency() {
+        assert_eq!(hand_tick_interval_secs(&cfg("hourly"), None), Some(3_600));
+        assert_eq!(hand_tick_interval_secs(&cfg("every_6h"), None), Some(21_600));
+        assert_eq!(hand_tick_interval_secs(&cfg("daily"), None), Some(86_400));
+        assert_eq!(hand_tick_interval_secs(&cfg("weekly"), None), Some(604_800));
+    }
+
+    /// `update_frequency` must win over the hand's declared interval — otherwise
+    /// the UI setting is decorative, which is the bug this fixes.
+    #[test]
+    fn test_configured_frequency_beats_hand_declared_interval() {
+        assert_eq!(
+            hand_tick_interval_secs(&cfg("every_6h"), Some(3_600)),
+            Some(21_600)
+        );
+    }
+
+    /// `manual` disables the self-prompt entirely, so an instance driven by its
+    /// own cron schedule does not also sweep on a timer and duplicate the work.
+    #[test]
+    fn test_manual_frequency_disables_the_tick() {
+        for v in ["manual", "off", "never", "none", "  MANUAL  "] {
+            assert_eq!(
+                hand_tick_interval_secs(&cfg(v), Some(3_600)),
+                None,
+                "{v} should disable the autonomous tick"
+            );
+        }
+    }
+
+    /// With nothing configured, fall back to the hand's value, then the default.
+    #[test]
+    fn test_hand_tick_falls_back_when_unconfigured() {
+        let empty = HashMap::new();
+        assert_eq!(hand_tick_interval_secs(&empty, Some(120)), Some(120));
+        assert_eq!(
+            hand_tick_interval_secs(&empty, None),
+            Some(DEFAULT_HAND_TICK_SECS)
+        );
+    }
+
+    /// A typo must not silently render an autonomous hand inert — unknown values
+    /// fall through to the declared default rather than disabling the loop.
+    #[test]
+    fn test_unknown_frequency_falls_back_rather_than_disabling() {
+        assert_eq!(
+            hand_tick_interval_secs(&cfg("every_5_minutes"), Some(900)),
+            Some(900)
+        );
+        assert_eq!(
+            hand_tick_interval_secs(&cfg("every_5_minutes"), None),
+            Some(DEFAULT_HAND_TICK_SECS)
+        );
+    }
 
     #[test]
     fn test_manifest_to_capabilities() {

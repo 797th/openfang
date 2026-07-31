@@ -36,9 +36,13 @@ label = "Exhaustive (multi-hop research)"
 [[settings]]
 key = "update_frequency"
 label = "Update Frequency"
-description = "How often to run collection sweeps"
+description = "How often the collector wakes itself up to sweep. Pick 'Manual' when a schedule already drives this instance, otherwise it sweeps on both and does the work twice."
 setting_type = "select"
 default = "daily"
+
+[[settings.options]]
+value = "manual"
+label = "Manual / schedule-driven only"
 
 [[settings.options]]
 value = "hourly"
