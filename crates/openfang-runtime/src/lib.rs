@@ -7,6 +7,49 @@
 /// Some LLM providers (e.g. Moonshot, Qwen) reject requests without one.
 pub const USER_AGENT: &str = "openfang/0.3.48";
 
+/// Connect timeout for LLM provider requests, in seconds.
+///
+/// Only covers TCP + TLS establishment, so it can be short: a provider that
+/// cannot be reached should fail over immediately rather than stalling a turn.
+pub const LLM_CONNECT_TIMEOUT_SECS: u64 = 15;
+
+/// Read timeout for LLM provider requests, in seconds.
+///
+/// This is a *stall* detector, not a budget for the whole request: it bounds
+/// the gap between successive bytes, so a long generation or a long stream is
+/// fine as long as the connection keeps producing something.
+///
+/// `reqwest` applies NO timeout by default. Without this, a provider that
+/// accepts the connection and then never answers hangs the agent **forever** —
+/// observed repeatedly against NVIDIA NIM, where an agent sat 15 minutes on a
+/// single request and made zero tool calls while the same model answered a
+/// direct probe in seconds.
+///
+/// The critical consequence is not just the delay. A hang never returns `Err`,
+/// so `FallbackDriver` never fires: the fallback chain is unreachable precisely
+/// when it is needed. Converting a hang into an error is what makes fallback
+/// work at all.
+///
+/// Kept well under `DEFAULT_AGENT_TURN_TIMEOUT_SECS` (600) so the driver, not
+/// the turn supervisor, is what gives up first — that way the error is
+/// attributable to the provider and a fallback still has time to run.
+pub const LLM_READ_TIMEOUT_SECS: u64 = 300;
+
+/// Read timeout for embedding provider requests, in seconds.
+///
+/// Deliberately much shorter than `LLM_READ_TIMEOUT_SECS`: an embedding call
+/// has no generation phase, returns a fixed-size vector, and normally completes
+/// in well under a second, so a stall of a minute already means the provider is
+/// not coming back.
+///
+/// Failing fast is also cheap here, unlike a chat completion. Embeddings are
+/// only used to *upgrade* memory recall to vector similarity search, and
+/// `agent_loop` already logs "falling back to text search" and continues with
+/// keyword recall when `embed_one` returns `Err`. Waiting the full 300s would
+/// stall the turn before doing the same work the fallback would have done
+/// immediately.
+pub const EMBEDDING_READ_TIMEOUT_SECS: u64 = 60;
+
 pub mod a2a;
 pub mod agent_context;
 pub mod agent_loop;
