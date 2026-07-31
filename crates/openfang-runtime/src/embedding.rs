@@ -96,7 +96,21 @@ impl OpenAIEmbeddingDriver {
             api_key: Zeroizing::new(config.api_key),
             base_url: config.base_url,
             model: config.model,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .user_agent(crate::USER_AGENT)
+                // reqwest applies no timeout by default: without these a provider
+                // that accepts the connection and never answers stalls the turn
+                // forever instead of returning Err, so the documented fallback to
+                // text search in agent_loop never runs. The read timeout is much
+                // shorter than the chat one — see crate::EMBEDDING_READ_TIMEOUT_SECS.
+                .connect_timeout(std::time::Duration::from_secs(
+                    crate::LLM_CONNECT_TIMEOUT_SECS,
+                ))
+                .read_timeout(std::time::Duration::from_secs(
+                    crate::EMBEDDING_READ_TIMEOUT_SECS,
+                ))
+                .build()
+                .unwrap_or_default(),
             dims,
         })
     }

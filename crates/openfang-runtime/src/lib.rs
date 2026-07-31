@@ -35,6 +35,21 @@ pub const LLM_CONNECT_TIMEOUT_SECS: u64 = 15;
 /// attributable to the provider and a fallback still has time to run.
 pub const LLM_READ_TIMEOUT_SECS: u64 = 300;
 
+/// Read timeout for embedding provider requests, in seconds.
+///
+/// Deliberately much shorter than `LLM_READ_TIMEOUT_SECS`: an embedding call
+/// has no generation phase, returns a fixed-size vector, and normally completes
+/// in well under a second, so a stall of a minute already means the provider is
+/// not coming back.
+///
+/// Failing fast is also cheap here, unlike a chat completion. Embeddings are
+/// only used to *upgrade* memory recall to vector similarity search, and
+/// `agent_loop` already logs "falling back to text search" and continues with
+/// keyword recall when `embed_one` returns `Err`. Waiting the full 300s would
+/// stall the turn before doing the same work the fallback would have done
+/// immediately.
+pub const EMBEDDING_READ_TIMEOUT_SECS: u64 = 60;
+
 pub mod a2a;
 pub mod agent_context;
 pub mod agent_loop;
