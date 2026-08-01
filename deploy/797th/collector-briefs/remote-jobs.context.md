@@ -31,7 +31,7 @@ been shown.
    say so in `properties`.
 5. **Real and directly applicable.** A link to the company's own posting or its
    ATS (Greenhouse, Lever, Ashby, Workable, Rippling). REJECT aggregator
-   reposts with no original link, staffing-agency listings, and "join our talent
+   listings cited as the apply link (see Provenance), staffing-agency listings, and "join our talent
    pool" evergreen pages.
 
 ## No duplicates — do this FIRST, every run
@@ -58,17 +58,47 @@ the title was tweaked. Only a genuinely different opening counts.
 
 ## Where to look
 
-Go to where postings originate, not where they are aggregated:
+Postings ORIGINATE on a company's own board. Aggregators are a discovery
+index, not a source. Both matter, but they play different roles — see
+"Provenance" below.
+
+**Originating boards (preferred — these carry comp and a real apply link):**
+
+- company career pages on Greenhouse / Lever / Ashby / Workable / Rippling
+- `"remote" "software engineer" site:boards.greenhouse.io`
+- `"remote" "software engineer" site:jobs.lever.co`
+- YC "Work at a Startup", Wellfound / AngelList remote roles
+
+**Discovery indexes (use to FIND roles, never to cite them):**
 
 - the monthly Hacker News **"Ask HN: Who is hiring?"** thread — filter to REMOTE
 - `weworkremotely.com`, `remoteok.com`, `remotive.com` — software category
-- Wellfound / AngelList remote roles, YC "Work at a Startup"
-- company career pages on Greenhouse / Lever / Ashby job boards
-- `"remote" "software engineer" site:boards.greenhouse.io`
-- `"fully remote" backend engineer hiring <current month> <current year>`
+
+**Rotate your sources every run.** Use at least THREE distinct sources per
+run, and do not begin two consecutive runs with the same source. If one
+source is producing every role you find, you are walking a single list
+top-down and will surface the same few bulk-posting employers forever —
+stop and go somewhere else.
 
 Use the ACTUAL current year and month from the Current Date you are given.
 Never assume a year.
+
+## Provenance — the apply link must be the real one
+
+For every role you report, the recorded `url` MUST be the company's own
+posting or its ATS entry (Greenhouse, Lever, Ashby, Workable, Rippling), or
+the company's careers page for that specific role.
+
+If you found a role on We Work Remotely, RemoteOK, Remotive, or any other
+index, that is where you FOUND it — it is not the posting. Follow through to
+the original and record that link. If you cannot reach an original posting,
+DROP the role. Never record an aggregator URL as the apply link, and never
+write "apply via WWR", "apply via RemoteOK", or similar. Hard filter 5
+already forbids this; it is restated here because it is the rule most often
+broken.
+
+Cite the index in the report's `Sources` section if you used it — that is
+what the Sources section is for.
 
 ## Recording to the knowledge graph
 
@@ -132,6 +162,10 @@ cycle — a quiet cycle is a correct outcome.
 
 ## Non-negotiables
 
+- **At most 2 roles per company per run.** One employer must never dominate
+  a cycle. On hitting 2 for a company, skip its remaining openings — they
+  will still be there next run, and a list of ten roles at three companies
+  is worth less than ten roles at ten companies.
 - **At most 10 new roles per run.** Count as you go. On hitting 10, or once
   roughly half your tool calls are spent, STOP COLLECTING and write the report.
   A run that exhausts its iterations delivers NOTHING.
